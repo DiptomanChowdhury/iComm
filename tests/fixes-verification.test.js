@@ -344,9 +344,9 @@ describe('FIX 12 — EmergencyPanel Implemented', () => {
     expect(dwellButtons).toHaveLength(3);
   });
 
-  test('EmergencyPanel accepts onAction prop and dispatches action types', () => {
+  test('EmergencyPanel accepts onAction and cooldown props and dispatches action types', () => {
     const panel = readSrc('components/emergency/EmergencyPanel.jsx');
-    expect(panel).toContain(`{ onAction }`);
+    expect(panel).toContain(`{ onAction, cooldown }`);
     expect(panel).toContain(`() => onAction('emergency')`);
     expect(panel).toContain(`() => onAction('caregiver')`);
     expect(panel).toContain(`() => onAction('quickmsg')`);
@@ -377,5 +377,60 @@ describe('FIX 13 — useTTS Hook in Sidebar', () => {
     const sidebar = readSrc('components/layout/Sidebar.jsx');
     expect(sidebar).toContain(`speak(messageText)`);
     expect(sidebar).not.toContain(`SpeechSynthesisUtterance`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ROUND 3 — 4 targeted fixes
+// ---------------------------------------------------------------------------
+describe('Round 3 — FIX 1: gazeAlpha ref in WebSocket closure', () => {
+  test('gazeAlphaRef is declared and synced via useEffect', () => {
+    const gaze = readSrc('hooks/useGaze.js');
+    expect(gaze).toContain('const gazeAlphaRef = useRef(gazeAlpha ?? 0.3)');
+    expect(gaze).toContain('gazeAlphaRef.current = gazeAlpha ?? 0.3');
+  });
+
+  test('ws.onmessage reads gazeAlphaRef.current instead of captured gazeAlpha', () => {
+    const gaze = readSrc('hooks/useGaze.js');
+    expect(gaze).toContain('const alpha = gazeAlphaRef.current;');
+    expect(gaze).not.toContain("typeof gazeAlpha === 'number'");
+  });
+});
+
+describe('Round 3 — FIX 2: EmergencyPanel cooldown prop', () => {
+  test('EmergencyPanel accepts cooldown prop', () => {
+    const panel = readSrc('components/emergency/EmergencyPanel.jsx');
+    expect(panel).toContain('{ onAction, cooldown }');
+  });
+
+  test('Each DwellButton receives disabled from cooldown', () => {
+    const panel = readSrc('components/emergency/EmergencyPanel.jsx');
+    expect(panel).toContain('disabled={cooldown?.emergency ?? false}');
+    expect(panel).toContain('disabled={cooldown?.caregiver ?? false}');
+    expect(panel).toContain('disabled={cooldown?.quickmsg ?? false}');
+  });
+
+  test('Sidebar passes cooldown prop to EmergencyPanel', () => {
+    const sidebar = readSrc('components/layout/Sidebar.jsx');
+    expect(sidebar).toContain('cooldown={emergencyCooldown}');
+  });
+});
+
+describe('Round 3 — FIX 3: DevTools gate for production', () => {
+  test('main.js guards openDevTools with !app.isPackaged', () => {
+    const main = readSrc('main.js');
+    expect(main).toContain("if (!app.isPackaged) mainWindow.webContents.openDevTools()");
+  });
+});
+
+describe('Round 3 — FIX 4: Emergency confirm modal audible alert', () => {
+  test('EmergencyConfirmModal has useEffect with SpeechSynthesisUtterance', () => {
+    const modal = readSrc('components/emergency/EmergencyConfirmModal.jsx');
+    expect(modal).toContain('SpeechSynthesisUtterance(msg)');
+    expect(modal).toContain("window.speechSynthesis.cancel()");
+    expect(modal).toContain('u.rate = 1.1');
+    expect(modal).toContain("Emergency call will be triggered");
+    expect(modal).toContain("Caregiver alert will be sent");
+    expect(modal).toContain("Quick message will be sent");
   });
 });
