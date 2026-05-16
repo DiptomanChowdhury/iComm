@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useRef } from 'react';
 import DwellButton from '../core/DwellButton';
+import EmergencyPanel from '../emergency/EmergencyPanel';
 import EmergencyConfirmModal from '../emergency/EmergencyConfirmModal';
 import { useSettingsContext } from '../../context/SettingsContext';
 import useTTS from '../../hooks/useTTS';
@@ -20,9 +21,23 @@ export default React.memo(function Sidebar({ messageText, clearMessage, backspac
   }, []);
 
   const handleEmergencyAction = useCallback((action) => {
+    const endpoints = {
+      emergency: 'http://localhost:8000/send-alert',
+      caregiver: 'http://localhost:8000/send-caregiver-alert',
+      quickmsg:  'http://localhost:8000/send-quick-message',
+    };
+    fetch(endpoints[action], {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone: action === 'emergency' ? settings.emergencyPhone : settings.caregiverPhone,
+        message: messageText || '',
+      }),
+      mode: 'no-cors',
+    }).catch(() => {});
     startCooldown(action);
     setEmergencyModal(null);
-  }, [startCooldown]);
+  }, [startCooldown, settings, messageText]);
 
   return (
     <>
@@ -74,36 +89,7 @@ export default React.memo(function Sidebar({ messageText, clearMessage, backspac
             gap: 'var(--sp-2)',
           }}
         >
-          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--accent-red)', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-            Emergency
-          </span>
-          <DwellButton
-            label="Emergency Call"
-            variant="emergency"
-            size="sm"
-            ariaLabel="Emergency Call — dwell to trigger"
-            onSelect={() => setEmergencyModal('emergency')}
-            disabled={emergencyCooldown.emergency}
-            style={{ width: '100%', background: 'var(--accent-red)', color: '#FFFFFF', fontWeight: 600 }}
-          />
-          <DwellButton
-            label="Caregiver Alert"
-            variant="emergency"
-            size="sm"
-            ariaLabel="Caregiver Alert — dwell to trigger"
-            onSelect={() => setEmergencyModal('caregiver')}
-            disabled={emergencyCooldown.caregiver}
-            style={{ width: '100%', background: 'var(--accent-orange)', color: '#FFFFFF', fontWeight: 600 }}
-          />
-          <DwellButton
-            label="Quick Message"
-            variant="emergency"
-            size="sm"
-            ariaLabel="Quick Message — dwell to trigger"
-            onSelect={() => setEmergencyModal('quickmsg')}
-            disabled={emergencyCooldown.quickmsg}
-            style={{ width: '100%', background: 'var(--accent-yellow)', color: '#0D1B2A', fontWeight: 600 }}
-          />
+          <EmergencyPanel onAction={(actionType) => setEmergencyModal(actionType)} />
         </div>
 
         <section aria-label="How iComm works" style={{ marginTop: 'auto', paddingTop: 'var(--sp-3)' }}>

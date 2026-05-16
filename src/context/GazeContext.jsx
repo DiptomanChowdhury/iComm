@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useCallback } from 'react';
 import useGaze from '../hooks/useGaze';
+import { useSettingsContext } from './SettingsContext';
 
 export const GazeContext = createContext(null);
 
@@ -10,8 +11,8 @@ export function GazeProvider({ children }) {
       window.dispatchEvent(event);
     }
   }, []);
-
-  const { gazePos, hasFace, connected } = useGaze(handleBlink);
+  const { settings } = useSettingsContext();
+  const { gazePos, hasFace, connected } = useGaze(handleBlink, settings.gazeAlpha);
 
   return (
     <GazeContext.Provider value={{ gazePos, hasFace, connected }}>

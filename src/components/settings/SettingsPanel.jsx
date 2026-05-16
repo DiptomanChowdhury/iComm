@@ -7,6 +7,8 @@ export default React.memo(function SettingsPanel({ onClose, onOpenCalibration })
   const [pin, setPin] = useState('');
   const [isAuthed, setIsAuthed] = useState(false);
   const [voices, setVoices] = useState([]);
+  const [changePin, setChangePin] = useState({ current: '', newPin: '', confirm: '' });
+  const [pinMsg, setPinMsg] = useState('');
   const { settings, updateSetting } = useSettingsContext();
 
   React.useEffect(() => {
@@ -20,12 +22,12 @@ export default React.memo(function SettingsPanel({ onClose, onOpenCalibration })
   }, []);
 
   const handlePinSubmit = useCallback(() => {
-    if (pin === '0000') {
+    if (pin === settings.settingsPin) {
       setIsAuthed(true);
     } else {
       setPin('');
     }
-  }, [pin]);
+  }, [pin, settings.settingsPin]);
 
   if (!isAuthed) {
     return (
@@ -308,6 +310,53 @@ export default React.memo(function SettingsPanel({ onClose, onOpenCalibration })
               </div>
             ))}
           </div>
+        </section>
+
+        <div style={{ height: 1, background: 'var(--border-subtle)' }} />
+
+        <section style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
+          <h3 style={{ fontSize: 'var(--text-base)', color: 'var(--accent-green)', fontWeight: 600 }}>Change PIN</h3>
+          {pinMsg && <span style={{ fontSize: 'var(--text-xs)', color: pinMsg.includes('success') ? 'var(--accent-green)' : 'var(--accent-red)' }}>{pinMsg}</span>}
+          <input
+            type="password" placeholder="Current PIN" maxLength={4}
+            value={changePin.current}
+            onChange={(e) => setChangePin(prev => ({ ...prev, current: e.target.value }))}
+            aria-label="Current PIN"
+            style={{ background: 'var(--bg-key)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '8px 12px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)', fontFamily: 'monospace', outline: 'none', letterSpacing: 4 }}
+          />
+          <input
+            type="password" placeholder="New PIN" maxLength={4}
+            value={changePin.newPin}
+            onChange={(e) => setChangePin(prev => ({ ...prev, newPin: e.target.value }))}
+            aria-label="New PIN"
+            style={{ background: 'var(--bg-key)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '8px 12px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)', fontFamily: 'monospace', outline: 'none', letterSpacing: 4 }}
+          />
+          <input
+            type="password" placeholder="Confirm new PIN" maxLength={4}
+            value={changePin.confirm}
+            onChange={(e) => setChangePin(prev => ({ ...prev, confirm: e.target.value }))}
+            aria-label="Confirm new PIN"
+            style={{ background: 'var(--bg-key)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '8px 12px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)', fontFamily: 'monospace', outline: 'none', letterSpacing: 4 }}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              if (changePin.current !== settings.settingsPin) {
+                setPinMsg('Current PIN is incorrect');
+              } else if (changePin.newPin !== changePin.confirm) {
+                setPinMsg('New PINs do not match');
+              } else if (changePin.newPin.length !== 4) {
+                setPinMsg('New PIN must be exactly 4 digits');
+              } else {
+                updateSetting('settingsPin', changePin.newPin);
+                setPinMsg('PIN changed successfully');
+                setChangePin({ current: '', newPin: '', confirm: '' });
+              }
+            }}
+            style={{ padding: '8px 16px', background: 'var(--accent-blue)', color: '#FFFFFF', border: 'none', borderRadius: 'var(--radius-md)', cursor: 'pointer', fontWeight: 600, fontSize: 'var(--text-sm)', alignSelf: 'flex-start' }}
+          >
+            Save PIN
+          </button>
         </section>
 
         <div style={{ height: 1, background: 'var(--border-subtle)' }} />

@@ -1,5 +1,6 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import CalibrationDot from './CalibrationDot';
+import DwellButton from '../core/DwellButton';
 import { useSettingsContext } from '../../context/SettingsContext';
 
 const DOT_POSITIONS = [
@@ -14,22 +15,28 @@ const DOT_POSITIONS = [
   { x: '90%', y: '90%' },
 ];
 
-const POSITIONS_PX = [
-  { x: window.innerWidth * 0.1, y: window.innerHeight * 0.15 },
-  { x: window.innerWidth * 0.5, y: window.innerHeight * 0.15 },
-  { x: window.innerWidth * 0.9, y: window.innerHeight * 0.15 },
-  { x: window.innerWidth * 0.1, y: window.innerHeight * 0.5 },
-  { x: window.innerWidth * 0.5, y: window.innerHeight * 0.5 },
-  { x: window.innerWidth * 0.9, y: window.innerHeight * 0.5 },
-  { x: window.innerWidth * 0.1, y: window.innerHeight * 0.85 },
-  { x: window.innerWidth * 0.5, y: window.innerHeight * 0.85 },
-  { x: window.innerWidth * 0.9, y: window.innerHeight * 0.85 },
-];
-
 export default React.memo(function CalibrationScreen({ onClose }) {
   const [phase, setPhase] = useState('intro');
   const [currentDot, setCurrentDot] = useState(0);
+  const [positionsPx, setPositionsPx] = useState([]);
   const { updateSetting } = useSettingsContext();
+
+  useEffect(() => {
+    const compute = () => setPositionsPx([
+      { x: window.innerWidth * 0.1,  y: window.innerHeight * 0.15 },
+      { x: window.innerWidth * 0.5,  y: window.innerHeight * 0.15 },
+      { x: window.innerWidth * 0.9,  y: window.innerHeight * 0.15 },
+      { x: window.innerWidth * 0.1,  y: window.innerHeight * 0.5  },
+      { x: window.innerWidth * 0.5,  y: window.innerHeight * 0.5  },
+      { x: window.innerWidth * 0.9,  y: window.innerHeight * 0.5  },
+      { x: window.innerWidth * 0.1,  y: window.innerHeight * 0.85 },
+      { x: window.innerWidth * 0.5,  y: window.innerHeight * 0.85 },
+      { x: window.innerWidth * 0.9,  y: window.innerHeight * 0.85 },
+    ]);
+    compute();
+    window.addEventListener('resize', compute);
+    return () => window.removeEventListener('resize', compute);
+  }, []);
 
   const handleDotComplete = useCallback(() => {
     if (currentDot < DOT_POSITIONS.length - 1) {
@@ -63,22 +70,13 @@ export default React.memo(function CalibrationScreen({ onClose }) {
         <p style={{ fontSize: 'var(--text-lg)', color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 500 }}>
           Look at each green dot as it appears. Hold your gaze steady until the ring completes.
         </p>
-        <button
-          type="button"
-          onClick={() => setPhase('calibrating')}
-          style={{
-            padding: '12px 32px',
-            fontSize: 'var(--text-lg)',
-            background: 'var(--accent-blue)',
-            color: '#FFFFFF',
-            border: 'none',
-            borderRadius: 'var(--radius-md)',
-            cursor: 'pointer',
-            fontWeight: 600,
-          }}
-        >
-          Start Calibration
-        </button>
+        <DwellButton
+          label="Start Calibration"
+          variant="action"
+          size="lg"
+          ariaLabel="Start eye tracking calibration"
+          onSelect={() => setPhase('calibrating')}
+        />
       </div>
     );
   }
@@ -102,22 +100,13 @@ export default React.memo(function CalibrationScreen({ onClose }) {
         <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
           Calibration complete!
         </h1>
-        <button
-          type="button"
-          onClick={onClose}
-          style={{
-            padding: '12px 32px',
-            fontSize: 'var(--text-lg)',
-            background: 'var(--accent-blue)',
-            color: '#FFFFFF',
-            border: 'none',
-            borderRadius: 'var(--radius-md)',
-            cursor: 'pointer',
-            fontWeight: 600,
-          }}
-        >
-          Close
-        </button>
+        <DwellButton
+          label="Continue"
+          variant="action"
+          size="lg"
+          ariaLabel="Calibration complete — close and continue"
+          onSelect={onClose}
+        />
       </div>
     );
   }
@@ -148,7 +137,7 @@ export default React.memo(function CalibrationScreen({ onClose }) {
         Point {currentDot + 1} of {DOT_POSITIONS.length}
       </div>
 
-      {POSITIONS_PX.slice(0, currentDot + 1).map((pos, i) => (
+      {positionsPx.length > 0 && positionsPx.slice(0, currentDot + 1).map((pos, i) => (
         <CalibrationDot
           key={i}
           num={i + 1}

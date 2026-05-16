@@ -48,7 +48,11 @@ export default React.memo(function AppShell({
           <MessageWindow text={messageText} />
           {view === 'keyboard' && (
             <VirtualKeyboard
-              onKeyPress={(char) => appendToMessage(char)}
+              onKeyPress={(char) => {
+                if (char === 'BACKSPACE') backspaceMessage();
+                else if (char === '\n') appendToMessage('\n');
+                else appendToMessage(char);
+              }}
               onOpenPhrases={() => setView('phrases')}
             />
           )}
