@@ -89,7 +89,7 @@ export default React.memo(function Sidebar({ messageText, clearMessage, backspac
             gap: 'var(--sp-2)',
           }}
         >
-          <EmergencyPanel onAction={(actionType) => setEmergencyModal(actionType)} />
+          <EmergencyPanel onAction={(actionType) => setEmergencyModal(actionType)} cooldown={emergencyCooldown} />
         </div>
 
         <section aria-label="How iComm works" style={{ marginTop: 'auto', paddingTop: 'var(--sp-3)' }}>

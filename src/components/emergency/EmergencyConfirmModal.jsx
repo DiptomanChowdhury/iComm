@@ -20,6 +20,19 @@ export default React.memo(function EmergencyConfirmModal({ action, onConfirm, on
   const timeoutRef = useRef(null);
 
   useEffect(() => {
+    const msg = action === 'emergency'
+      ? 'Emergency call will be triggered. Dwell confirm to proceed.'
+      : action === 'caregiver'
+      ? 'Caregiver alert will be sent. Dwell confirm to proceed.'
+      : 'Quick message will be sent. Dwell confirm to proceed.';
+    const u = new SpeechSynthesisUtterance(msg);
+    u.rate = 1.1;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+    return () => window.speechSynthesis.cancel();
+  }, [action]);
+
+  useEffect(() => {
     timeoutRef.current = setTimeout(() => {
       onCancel();
     }, 10000);

@@ -12,8 +12,10 @@ export default function useGaze(onBlink, gazeAlpha) {
   const faceTimeoutRef = useRef(null);
   const onBlinkRef = useRef(onBlink);
   const smoothedRef = useRef({ x: 0, y: 0 });
+  const gazeAlphaRef = useRef(gazeAlpha ?? 0.3);
 
   useEffect(() => { onBlinkRef.current = onBlink; }, [onBlink]);
+  useEffect(() => { gazeAlphaRef.current = gazeAlpha ?? 0.3; }, [gazeAlpha]);
 
   const connect = useCallback(() => {
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
@@ -36,7 +38,7 @@ export default function useGaze(onBlink, gazeAlpha) {
         try {
           const data = JSON.parse(event.data);
           if (typeof data.gazex === 'number' && typeof data.gazey === 'number') {
-            const alpha = typeof gazeAlpha === 'number' ? gazeAlpha : 0.3;
+            const alpha = gazeAlphaRef.current;
             smoothedRef.current = {
               x: alpha * data.gazex + (1 - alpha) * smoothedRef.current.x,
               y: alpha * data.gazey + (1 - alpha) * smoothedRef.current.y,
