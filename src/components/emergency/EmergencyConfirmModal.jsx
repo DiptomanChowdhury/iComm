@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import DwellButton from '../core/DwellButton';
+import { postAlert } from '../../utils/postAlert';
 
 const QUICK_MESSAGES = [
   { en: 'I need help immediately', hi: '\u092E\u0941\u091D\u0947 \u0924\u0941\u0930\u0902\u0924 \u092E\u0926\u0926 \u091A\u093E\u0939\u093F\u090F' },
@@ -52,7 +53,7 @@ export default React.memo(function EmergencyConfirmModal({ action, onConfirm, on
     utterance.lang = 'en-US';
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
-    fetch('http://localhost:8000/send-alert', { method: 'POST' }).catch(() => {});
+    postAlert('quickmsg', { message: msg });
     onConfirm('quickmsg');
   }, [onConfirm]);
 

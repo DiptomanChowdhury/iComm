@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import CalibrationDot from './CalibrationDot';
 import DwellButton from '../core/DwellButton';
 import { useSettingsContext } from '../../context/SettingsContext';
+import { postAlert } from '../../utils/postAlert';
 
 const DOT_POSITIONS = [
   { x: '10%', y: '10%' },
@@ -44,7 +45,7 @@ export default React.memo(function CalibrationScreen({ onClose }) {
     } else {
       setPhase('complete');
       updateSetting('calibrated', true);
-      fetch('http://localhost:8000/calibrate-done', { method: 'POST', mode: 'no-cors' }).catch(() => {});
+      postAlert('calibrateDone');
     }
   }, [currentDot, updateSetting]);
 

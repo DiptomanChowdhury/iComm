@@ -4,6 +4,7 @@ import EmergencyPanel from '../emergency/EmergencyPanel';
 import EmergencyConfirmModal from '../emergency/EmergencyConfirmModal';
 import { useSettingsContext } from '../../context/SettingsContext';
 import useTTS from '../../hooks/useTTS';
+import { postAlert } from '../../utils/postAlert';
 
 export default React.memo(function Sidebar({ messageText, clearMessage, backspaceMessage }) {
   const [emergencyModal, setEmergencyModal] = useState(null);
@@ -21,20 +22,10 @@ export default React.memo(function Sidebar({ messageText, clearMessage, backspac
   }, []);
 
   const handleEmergencyAction = useCallback((action) => {
-    const endpoints = {
-      emergency: 'http://localhost:8000/send-alert',
-      caregiver: 'http://localhost:8000/send-caregiver-alert',
-      quickmsg:  'http://localhost:8000/send-quick-message',
-    };
-    fetch(endpoints[action], {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        phone: action === 'emergency' ? settings.emergencyPhone : settings.caregiverPhone,
-        message: messageText || '',
-      }),
-      mode: 'no-cors',
-    }).catch(() => {});
+    postAlert(action, {
+      phone: action === 'emergency' ? settings.emergencyPhone : settings.caregiverPhone,
+      message: messageText || '',
+    });
     startCooldown(action);
     setEmergencyModal(null);
   }, [startCooldown, settings, messageText]);

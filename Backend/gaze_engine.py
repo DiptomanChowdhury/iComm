@@ -1,10 +1,13 @@
 # gaze_engine.py
 # This is the main eye tracking engine for iComm
 
+import asyncio
 import cv2
 import json
 import joblib
 import numpy as np
+import os
+import sys
 import time
 from pathlib import Path
 
@@ -40,27 +43,37 @@ class FaceLandmarkerProcessor:
 
         options = vision.FaceLandmarkerOptions(
             base_options=mp_tasks.BaseOptions(model_asset_path=ensure_face_landmarker_model()),
-            running_mode=vision.RunningMode.VIDEO,
+            running_mode=vision.RunningMode.IMAGE,
             num_faces=1,
-            min_face_detection_confidence=0.5,
-            min_face_presence_confidence=0.5,
-            min_tracking_confidence=0.5,
+            min_face_detection_confidence=0.3,
+            min_face_presence_confidence=0.3,
+            min_tracking_confidence=0.3,
         )
         self._mp = mp
         self._landmarker = vision.FaceLandmarker.create_from_options(options)
-        self._timestamp_ms = 0
 
     def process(self, rgb_frame):
         """Process an RGB numpy frame; returns a FaceLandmarkerResult."""
-        self._timestamp_ms += 33
         mp_image = self._mp.Image(
             image_format=self._mp.ImageFormat.SRGB,
             data=np.ascontiguousarray(rgb_frame),
         )
-        return self._landmarker.detect_for_video(mp_image, self._timestamp_ms)
+        return self._landmarker.detect(mp_image)
 
     def close(self):
         self._landmarker.close()
+
+
+def open_webcam(index=0):
+    """Open the default or configured webcam (Windows-friendly)."""
+    if sys.platform == 'win32':
+        cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+        if cap.isOpened():
+            return cap
+    cap = cv2.VideoCapture(index)
+    if cap.isOpened():
+        return cap
+    return cv2.VideoCapture(index)
 
 
 def get_face_landmarker():
@@ -220,10 +233,14 @@ def run_tracker():
     
 """
 
-import asyncio
 import websockets
 
-def build_gaze_payload(gaze_x, gaze_y, blink_type, has_face):
+# Keep in sync with Backend/calibration.py SCREEN_W / SCREEN_H
+SCREEN_W = 1920
+SCREEN_H = 1080
+
+
+def build_gaze_payload(gaze_x, gaze_y, blink_type, has_face, screen_w=None, screen_h=None):
     """
     WebSocket message shape expected by frontend useGaze.js.
     Keys must be gazex / gazey / hasface (not gaze_x / has_face).
@@ -231,9 +248,31 @@ def build_gaze_payload(gaze_x, gaze_y, blink_type, has_face):
     return {
         'gazex': int(gaze_x),
         'gazey': int(gaze_y),
+        'screenw': int(screen_w if screen_w is not None else SCREEN_W),
+        'screenh': int(screen_h if screen_h is not None else SCREEN_H),
         'blink': blink_type,
         'hasface': bool(has_face),
     }
+
+
+def estimate_gaze_from_iris(lm, frame_w, frame_h, screen_w, screen_h):
+    """Rough screen gaze from iris or eye-centre when ML calibration is missing."""
+    n = len(lm)
+    try:
+        if n > max(LEFT_IRIS + RIGHT_IRIS):
+            left = get_iris_center(lm, LEFT_IRIS, frame_w, frame_h)
+            right = get_iris_center(lm, RIGHT_IRIS, frame_w, frame_h)
+        else:
+            left = np.mean([[lm[i].x * frame_w, lm[i].y * frame_h] for i in LEFT_EYE], axis=0)
+            right = np.mean([[lm[i].x * frame_w, lm[i].y * frame_h] for i in RIGHT_EYE], axis=0)
+    except (IndexError, TypeError):
+        left = np.array([frame_w * 0.4, frame_h * 0.5])
+        right = np.array([frame_w * 0.6, frame_h * 0.5])
+    cx = (left[0] + right[0]) / 2
+    cy = (left[1] + right[1]) / 2
+    gaze_x = int(np.clip(cx / frame_w * screen_w, 0, screen_w - 1))
+    gaze_y = int(np.clip(cy / frame_h * screen_h, 0, screen_h - 1))
+    return gaze_x, gaze_y
 
 def get_iris_center(landmarks, iris_indices, frame_w, frame_h):
     """
@@ -272,7 +311,9 @@ def load_gaze_model(path=None):
     if path is None:
         path = Path(__file__).resolve().parent.parent / 'data' / 'gaze_model.pkl'
     data = joblib.load(path)
-    return data['model_x'], data['model_y']
+    screen_w = data.get('screen_w', SCREEN_W)
+    screen_h = data.get('screen_h', SCREEN_H)
+    return data['model_x'], data['model_y'], screen_w, screen_h
 
 def predict_gaze(model_x, model_y, features):
     """Predict screen (x, y) in pixels from a 6-feature eye vector."""
@@ -300,68 +341,135 @@ class GazeSmoother:
         self.smooth_x = None
         self.smooth_y = None
 
-async def gaze_server(websocket):
+class GazeHub:
     """
-    WebSocket server that streams gaze data to the React frontend.
-    The frontend connects to ws://localhost:8765 and receives JSON messages.
+    One webcam + inference loop shared by all browser tabs.
+    Avoids Windows camera lock when the UI reconnects or opens multiple tabs.
     """
-    print('Frontend connected!')
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print('ERROR: Cannot open webcam. Check connection and camera permissions.')
-        return
 
-    smoother = GazeSmoother(alpha=0.2)
-    blink_d = BlinkDetector()
+    def __init__(self):
+        self._clients = set()
+        self._task = None
+        self._landmarker = None
 
-    try:
-        model_x, model_y = load_gaze_model()
-        calibrated = True
-        print('Calibration model loaded.')
-    except (FileNotFoundError, OSError, KeyError, ValueError) as err:
-        calibrated = False
-        model_x = model_y = None
-        print(f'No calibration model ({err}). Blink detection still works; run calibration.py for gaze.')
-    
-    '''
-    calibrated = False  # For now, we won't use the gaze prediction model
-    print ("Calibration disabled — gaze prediction will not work until you run calibration.py")
-    '''
+    async def register(self, websocket):
+        self._clients.add(websocket)
+        print(f'Frontend connected ({len(self._clients)} client(s))')
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._capture_loop())
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            await asyncio.sleep(0.01)
-            continue
+    async def unregister(self, websocket):
+        self._clients.discard(websocket)
+        print(f'Frontend disconnected ({len(self._clients)} client(s))')
+        if not self._clients and self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
 
-        frame = cv2.flip(frame, 1)
-        rgb   = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = get_face_landmarker().process(rgb)
+    async def _capture_loop(self):
+        camera_index = int(os.environ.get('ICOMM_CAMERA_INDEX', '0'))
+        cap = open_webcam(camera_index)
+        if not cap.isOpened():
+            print('ERROR: Cannot open webcam. Check ICOMM_CAMERA_INDEX and camera permissions.')
+            return
 
-        gaze_x, gaze_y, blink_type = 0, 0, None
-        has_face = bool(result.face_landmarks)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-        if has_face:
-            lm = result.face_landmarks[0]
-            h, w = frame.shape[:2]
+        self._landmarker = FaceLandmarkerProcessor()
+        smoother = GazeSmoother(alpha=0.2)
+        blink_d = BlinkDetector()
+        frames_without_face = 0
 
-            left_eye = np.array([[lm[i].x * w, lm[i].y * h] for i in LEFT_EYE])
-            right_eye = np.array([[lm[i].x * w, lm[i].y * h] for i in RIGHT_EYE])
-            ear = (calculate_ear(left_eye) + calculate_ear(right_eye)) / 2.0
-            blink_type = blink_d.update(ear)
-
-            if calibrated:
-                features = get_gaze_features(lm, w, h)
-                raw_x, raw_y = predict_gaze(model_x, model_y, features)
-                gaze_x, gaze_y = smoother.update(raw_x, raw_y)
-
-        message = json.dumps(build_gaze_payload(gaze_x, gaze_y, blink_type, has_face))
+        screen_w, screen_h = SCREEN_W, SCREEN_H
         try:
-            await websocket.send(message)
-        except websockets.exceptions.ConnectionClosed:
-            break
+            model_x, model_y, screen_w, screen_h = load_gaze_model()
+            calibrated = True
+            print(f'Calibration model loaded ({screen_w}x{screen_h}).')
+        except (FileNotFoundError, OSError, KeyError, ValueError) as err:
+            calibrated = False
+            model_x = model_y = None
+            print(f'No calibration model ({err}). Using iris estimate; run calibration.py for accuracy.')
 
-    cap.release()
+        try:
+            while self._clients:
+                ret, frame = cap.read()
+                if not ret:
+                    await asyncio.sleep(0.02)
+                    continue
+
+                frame = cv2.flip(frame, 1)
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                gaze_x, gaze_y, blink_type = 0, 0, None
+                has_face = False
+
+                try:
+                    result = self._landmarker.process(rgb)
+                    has_face = bool(result.face_landmarks)
+
+                    if has_face:
+                        frames_without_face = 0
+                        lm = result.face_landmarks[0]
+                        h, w = frame.shape[:2]
+
+                        left_eye = np.array([[lm[i].x * w, lm[i].y * h] for i in LEFT_EYE])
+                        right_eye = np.array([[lm[i].x * w, lm[i].y * h] for i in RIGHT_EYE])
+                        ear = (calculate_ear(left_eye) + calculate_ear(right_eye)) / 2.0
+                        blink_type = blink_d.update(ear)
+
+                        if calibrated:
+                            features = get_gaze_features(lm, w, h)
+                            raw_x, raw_y = predict_gaze(model_x, model_y, features)
+                            gaze_x, gaze_y = smoother.update(raw_x, raw_y)
+                        else:
+                            gaze_x, gaze_y = estimate_gaze_from_iris(lm, w, h, screen_w, screen_h)
+                    else:
+                        frames_without_face += 1
+                        if frames_without_face == 60:
+                            print('No face detected for ~2s — check lighting and look at the webcam.')
+                            frames_without_face = 0
+                except Exception as err:
+                    print(f'Gaze frame error: {err}')
+                    has_face = False
+
+                message = json.dumps(build_gaze_payload(
+                    gaze_x, gaze_y, blink_type, has_face, screen_w, screen_h,
+                ))
+
+                dead = []
+                for ws in list(self._clients):
+                    try:
+                        await ws.send(message)
+                    except websockets.exceptions.ConnectionClosed:
+                        dead.append(ws)
+                for ws in dead:
+                    self._clients.discard(ws)
+
+                await asyncio.sleep(0.001)
+        finally:
+            cap.release()
+            if self._landmarker:
+                self._landmarker.close()
+                self._landmarker = None
+            print('Webcam released.')
+
+
+_gaze_hub = GazeHub()
+
+
+async def gaze_server(websocket):
+    """WebSocket handler — one shared camera loop fans out to all clients."""
+    await _gaze_hub.register(websocket)
+    try:
+        await websocket.wait_closed()
+    finally:
+        await _gaze_hub.unregister(websocket)
+
 
 # Start the WebSocket server
 async def main():

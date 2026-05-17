@@ -28,10 +28,11 @@ export default React.memo(function DwellButton({
   style,
   className,
 }) {
-  const { gazePos } = useGazeContext();
+  const { gazePos, hasFace, connected, warmup } = useGazeContext();
   const [progress, setProgress] = useState(0);
   const [isGazing, setIsGazing] = useState(false);
   const [cooldown, setCooldown] = useState(false);
+  const [layoutTick, setLayoutTick] = useState(0);
   const buttonRef = useRef(null);
   const timerRef = useRef(null);
   const startTimeRef = useRef(null);
@@ -42,7 +43,27 @@ export default React.memo(function DwellButton({
   }, []);
 
   useEffect(() => {
+    const bump = () => setLayoutTick((t) => t + 1);
+    window.addEventListener('resize', bump);
+    window.addEventListener('scroll', bump, true);
+    return () => {
+      window.removeEventListener('resize', bump);
+      window.removeEventListener('scroll', bump, true);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!buttonRef.current || cooldown || disabled) return;
+
+    if (!connected || warmup || !hasFace) {
+      if (isGazing) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+        setProgress(0);
+        setIsGazing(false);
+      }
+      return;
+    }
 
     const rect = buttonRef.current.getBoundingClientRect();
     const isInside =
@@ -82,7 +103,7 @@ export default React.memo(function DwellButton({
       setProgress(0);
       setIsGazing(false);
     }
-  }, [gazePos, cooldown, disabled, dwellTime, onSelect, isReducedMotion]);
+  }, [gazePos, cooldown, disabled, dwellTime, onSelect, isReducedMotion, connected, hasFace, isGazing, layoutTick, warmup]);
 
   useEffect(() => {
     return () => {

@@ -87,7 +87,12 @@ def run_calibration():
     data_dir = Path(__file__).resolve().parent.parent / 'data'
     data_dir.mkdir(parents=True, exist_ok=True)
     output_path = data_dir / 'gaze_model.pkl'
-    joblib.dump({'model_x': model_x, 'model_y': model_y}, output_path)
+    joblib.dump({
+        'model_x': model_x,
+        'model_y': model_y,
+        'screen_w': SCREEN_W,
+        'screen_h': SCREEN_H,
+    }, output_path)
     print(f'Calibration complete! Model saved to {output_path}')
 
 

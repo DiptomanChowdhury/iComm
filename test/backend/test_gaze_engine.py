@@ -147,18 +147,22 @@ class TestGazeFeaturesAndModel:
         path = tmp_path / 'gaze_model.pkl'
         joblib.dump({'model_x': model_x, 'model_y': model_y}, path)
 
-        loaded_x, loaded_y = load_gaze_model(path)
+        loaded_x, loaded_y, sw, sh = load_gaze_model(path)
         x, y = predict_gaze(loaded_x, loaded_y, [0.1] * 6)
         assert x == 100
         assert y == 200
+        assert sw == 1920
+        assert sh == 1080
 
 
 class TestWebSocketPayload:
     def test_build_gaze_payload_matches_frontend_contract(self):
-        payload = build_gaze_payload(400, 300, 'short_blink', True)
+        payload = build_gaze_payload(400, 300, 'short_blink', True, 1920, 1080)
         assert payload == {
             'gazex': 400,
             'gazey': 300,
+            'screenw': 1920,
+            'screenh': 1080,
             'blink': 'short_blink',
             'hasface': True,
         }

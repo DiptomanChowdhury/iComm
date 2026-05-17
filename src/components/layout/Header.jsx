@@ -4,7 +4,7 @@ import { useSettingsContext } from '../../context/SettingsContext';
 import StatusBar from './StatusBar';
 
 export default React.memo(function Header({ onOpenSettings }) {
-  const { connected, hasFace } = useGazeContext();
+  const { connected, hasFace, streamLive, warmup } = useGazeContext();
   const { settings } = useSettingsContext();
 
   return (
@@ -37,6 +37,8 @@ export default React.memo(function Header({ onOpenSettings }) {
         connected={connected}
         hasFace={hasFace}
         calibrated={settings.calibrated}
+        streamLive={streamLive}
+        warmup={warmup}
       />
 
       <button

@@ -1,5 +1,6 @@
 {
   "scripts": {
+    "dev": "vite",
     "setup:venv": "powershell -ExecutionPolicy Bypass -File scripts/setup-venv.ps1",
     "test": "npm run test:frontend && npm run test:backend",
     "test:frontend": "vitest run",
@@ -11,10 +12,14 @@
   },
   "dependencies": {
     "@isomorphic-git/lightning-fs": "^4.6.2",
-    "isomorphic-git": "^1.38.0"
+    "isomorphic-git": "^1.38.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^4.5.2",
     "jsdom": "^29.1.1",
+    "vite": "^6.3.5",
     "vitest": "^4.1.6"
   }
 }
