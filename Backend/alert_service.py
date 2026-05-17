@@ -47,9 +47,9 @@ def get_twilio_client():
     if _twilio_client is not None:
         return _twilio_client
 
-    account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
-    auth_token = os.environ.get('TWILIO_AUTH_TOKEN')
-    if not account_sid or not auth_token or 'your_' in account_sid:
+    account_sid = os.environ.get('TWILIO_ACCOUNT_SID', '').strip()
+    auth_token = os.environ.get('TWILIO_AUTH_TOKEN', '').strip()
+    if not account_sid or not auth_token or 'your_' in account_sid or 'your_' in auth_token:
         return None
 
     from twilio.rest import Client
@@ -92,12 +92,19 @@ def send_whatsapp(body: str, to_number: Optional[str] = None):
             detail='Twilio is not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN.',
         )
 
-    message = client.messages.create(
-        body=body,
-        from_=TWILIO_WHATSAPP_FROM,
-        to=to,
-    )
-    return {'status': 'sent', 'sid': message.sid}
+    try:
+        message = client.messages.create(
+            body=body,
+            from_=TWILIO_WHATSAPP_FROM,
+            to=to,
+        )
+        return {'status': 'sent', 'sid': message.sid}
+    except Exception as e:
+        error_body = str(e)
+        raise HTTPException(
+            status_code=502,
+            detail=f'Twilio API error: {error_body}',
+        )
 
 
 @app.post('/send-alert')

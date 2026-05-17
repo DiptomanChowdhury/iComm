@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useGazeContext } from '../../context/GazeContext';
 
+const DWELL_MS = 3000;
+
 export default React.memo(function CalibrationDot({ num, total, position, onComplete }) {
   const { gazePos } = useGazeContext();
   const [progress, setProgress] = useState(0);
@@ -9,6 +11,41 @@ export default React.memo(function CalibrationDot({ num, total, position, onComp
   const dotRef = useRef(null);
   const timerRef = useRef(null);
   const startTimeRef = useRef(null);
+  const isGazingRef = useRef(false);
+  const onCompleteRef = useRef(onComplete);
+
+  useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
+
+  useEffect(() => {
+    if (done) return;
+
+    const onLongBlink = () => {
+      if (!isGazingRef.current) return;
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+      setProgress(100);
+      setDone(true);
+      setIsGazing(false);
+      isGazingRef.current = false;
+      onCompleteRef.current();
+    };
+
+    const onShortBlink = () => {
+      if (!isGazingRef.current) return;
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+      setProgress(0);
+      setIsGazing(false);
+      isGazingRef.current = false;
+    };
+
+    window.addEventListener('long-blink', onLongBlink);
+    window.addEventListener('short-blink', onShortBlink);
+    return () => {
+      window.removeEventListener('long-blink', onLongBlink);
+      window.removeEventListener('short-blink', onShortBlink);
+    };
+  }, [done]);
 
   useEffect(() => {
     if (!dotRef.current || done) return;
@@ -23,27 +60,22 @@ export default React.memo(function CalibrationDot({ num, total, position, onComp
 
     if (isInside && !isGazing) {
       setIsGazing(true);
+      isGazingRef.current = true;
       startTimeRef.current = Date.now();
 
       timerRef.current = setInterval(() => {
         const elapsed = Date.now() - startTimeRef.current;
-        const pct = Math.min((elapsed / 3000) * 100, 100);
+        const pct = Math.min((elapsed / DWELL_MS) * 100, 100);
         setProgress(pct);
-
-        if (pct >= 100) {
-          clearInterval(timerRef.current);
-          timerRef.current = null;
-          setDone(true);
-          onComplete();
-        }
       }, 16);
     } else if (!isInside && isGazing) {
       clearInterval(timerRef.current);
       timerRef.current = null;
       setProgress(0);
       setIsGazing(false);
+      isGazingRef.current = false;
     }
-  }, [gazePos, done, isGazing, onComplete]);
+  }, [gazePos, done, isGazing]);
 
   useEffect(() => {
     return () => {

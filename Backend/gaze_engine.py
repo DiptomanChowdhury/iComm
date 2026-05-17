@@ -96,19 +96,44 @@ LEFT_EYE  = [33, 160, 158, 133, 153, 144]
 # Right eye landmarks (6 points)
 RIGHT_EYE = [362, 385, 387, 263, 373, 380]
 
-# Iris landmarks (the centre of each eye — included in Face Landmarker model)
+# Iris landmarks (the centre of each eye — added by refine_landmarks=True)
 LEFT_IRIS  = [474, 475, 476, 477]   # 4 points forming a circle on left iris
 RIGHT_IRIS = [469, 470, 471, 472]   # 4 points forming a circle on right iris
 
-# Eye corner and eyelid landmarks for relative gaze estimation
-LEFT_EYE_INNER  = 33   # Left eye inner corner (near nose)
-LEFT_EYE_OUTER  = 133  # Left eye outer corner (near ear)
-LEFT_EYE_TOP    = 159  # Left upper eyelid centre
-LEFT_EYE_BOTTOM = 145  # Left lower eyelid centre
-RIGHT_EYE_INNER  = 362 # Right eye inner corner (near nose)
-RIGHT_EYE_OUTER  = 263 # Right eye outer corner (near ear)
-RIGHT_EYE_TOP    = 386 # Right upper eyelid centre
-RIGHT_EYE_BOTTOM = 374 # Right lower eyelid centre
+# Eye corner landmarks for relative iris position computation.
+# Inner corners are near the nose; outer corners near the temples.
+LEFT_CORNER_INNER  = 133
+LEFT_CORNER_OUTER  = 33
+RIGHT_CORNER_INNER = 362
+RIGHT_CORNER_OUTER = 263
+
+def get_relative_iris_position(landmarks, frame_w, frame_h):
+    """
+    Compute (rel_x, rel_y) for each iris relative to its eye socket corners.
+
+    Returns ((left_rel_x, left_rel_y), (right_rel_x, right_rel_y)).
+    Values are in [0, 1] where 0 = inner corner, 1 = outer corner for x,
+    and roughly 0 = upper lid, 1 = lower lid for y.
+
+    Head movement shifts socket corners and irises together, so relative
+    values stay stable. Only eye movement changes them.
+    """
+    def _socket_relative(iris_indices, corner_inner, corner_outer):
+        iris = get_iris_center(landmarks, iris_indices, frame_w, frame_h)
+        ci = np.array([landmarks[corner_inner].x * frame_w, landmarks[corner_inner].y * frame_h])
+        co = np.array([landmarks[corner_outer].x * frame_w, landmarks[corner_outer].y * frame_h])
+        socket_w = co[0] - ci[0]
+        socket_h = co[1] - ci[1]
+        if abs(socket_w) < 1 or abs(socket_h) < 1:
+            return 0.5, 0.5
+        rel_x = (iris[0] - ci[0]) / socket_w
+        rel_y = (iris[1] - ci[1]) / socket_h
+        return float(np.clip(rel_x, 0, 1)), float(np.clip(rel_y, 0, 1))
+
+    left  = _socket_relative(LEFT_IRIS,  LEFT_CORNER_INNER,  LEFT_CORNER_OUTER)
+    right = _socket_relative(RIGHT_IRIS, RIGHT_CORNER_INNER, RIGHT_CORNER_OUTER)
+    return left, right
+
 
 def calculate_ear(eye_landmarks):
     """
@@ -276,49 +301,25 @@ def build_gaze_payload(
 
 
 def estimate_gaze_from_iris(lm, frame_w, frame_h, screen_w, screen_h):
-    """Screen gaze from iris position relative to eye corners.
-    Responds to eye movements, not just head movements."""
+    """Rough screen gaze from relative iris position when ML calibration is missing.
+
+    Uses eye-socket-relative coordinates so head movement doesn't move the cursor.
+    Maps relative position linearly to screen: (0,0)=top-left, (1,1)=bottom-right.
+    """
     n = len(lm)
     try:
         if n > max(LEFT_IRIS + RIGHT_IRIS):
-            left_iris = get_iris_center(lm, LEFT_IRIS, frame_w, frame_h)
-            right_iris = get_iris_center(lm, RIGHT_IRIS, frame_w, frame_h)
-
-            # Eye corner / eyelid landmarks in pixel coordinates
-            li = np.array([lm[LEFT_EYE_INNER].x * frame_w, lm[LEFT_EYE_INNER].y * frame_h])
-            lo = np.array([lm[LEFT_EYE_OUTER].x * frame_w, lm[LEFT_EYE_OUTER].y * frame_h])
-            lt = np.array([lm[LEFT_EYE_TOP].x   * frame_w, lm[LEFT_EYE_TOP].y   * frame_h])
-            lb = np.array([lm[LEFT_EYE_BOTTOM].x * frame_w, lm[LEFT_EYE_BOTTOM].y * frame_h])
-            ri = np.array([lm[RIGHT_EYE_INNER].x * frame_w, lm[RIGHT_EYE_INNER].y * frame_h])
-            ro = np.array([lm[RIGHT_EYE_OUTER].x * frame_w, lm[RIGHT_EYE_OUTER].y * frame_h])
-            rt = np.array([lm[RIGHT_EYE_TOP].x   * frame_w, lm[RIGHT_EYE_TOP].y   * frame_h])
-            rb = np.array([lm[RIGHT_EYE_BOTTOM].x * frame_w, lm[RIGHT_EYE_BOTTOM].y * frame_h])
-
-            lx = _eye_ratio(left_iris, li, lo)
-            ly = _eye_ratio(left_iris, lt, lb)
-            rx = _eye_ratio(right_iris, ri, ro)
-            ry = _eye_ratio(right_iris, rt, rb)
-
-            cx = np.clip((lx + rx) * 0.5, 0, 1)
-            cy = np.clip((ly + ry) * 0.5, 0, 1)
-
-            gaze_x = int(cx * screen_w)
-            gaze_y = int(cy * screen_h)
+            (lrx, lry), (rrx, rry) = get_relative_iris_position(lm, frame_w, frame_h)
         else:
-            # No iris landmarks: fall back to head-midpoint tracking
-            left = np.mean([[lm[i].x * frame_w, lm[i].y * frame_h] for i in LEFT_EYE], axis=0)
-            right = np.mean([[lm[i].x * frame_w, lm[i].y * frame_h] for i in RIGHT_EYE], axis=0)
-            cx = (left[0] + right[0]) / 2
-            cy = (left[1] + right[1]) / 2
-            gaze_x = int(np.clip(cx / frame_w * screen_w, 0, screen_w - 1))
-            gaze_y = int(np.clip(cy / frame_h * screen_h, 0, screen_h - 1))
+            lrx = lry = rrx = rry = 0.5
     except (IndexError, TypeError):
-        left = np.array([frame_w * 0.4, frame_h * 0.5])
-        right = np.array([frame_w * 0.6, frame_h * 0.5])
-        cx = (left[0] + right[0]) / 2
-        cy = (left[1] + right[1]) / 2
-        gaze_x = int(np.clip(cx / frame_w * screen_w, 0, screen_w - 1))
-        gaze_y = int(np.clip(cy / frame_h * screen_h, 0, screen_h - 1))
+        lrx = lry = rrx = rry = 0.5
+
+    avg_x = (lrx + rrx) / 2
+    avg_y = (lry + rry) / 2
+
+    gaze_x = int(np.clip(avg_x * screen_w, 0, screen_w - 1))
+    gaze_y = int(np.clip(avg_y * screen_h, 0, screen_h - 1))
     return gaze_x, gaze_y
 
 def get_iris_center(landmarks, iris_indices, frame_w, frame_h):
@@ -333,51 +334,28 @@ def get_iris_center(landmarks, iris_indices, frame_w, frame_h):
     center = points.mean(axis=0)
     return center
 
-def _eye_ratio(pt, inner, outer):
-    """Project pt onto the inner→outer axis, return 0..1."""
-    v = outer - inner
-    d = np.linalg.norm(v)
-    if d < 1:
-        return 0.5
-    return float(np.clip(np.dot(pt - inner, v) / (d * d), 0.0, 1.0))
-
-
 def get_gaze_features(landmarks, frame_w, frame_h):
     """
-    Feature vector for the ML model.
-    Uses iris-to-eye-corner ratios (eye movement) + nose position (head pose).
+    Get the combined gaze feature vector for the ML model.
+    Uses iris position RELATIVE to each eye socket, not absolute
+    frame coordinates. This decouples gaze from head position.
+
+    Feature vector (6 elements):
+      [left_rel_x, left_rel_y, right_rel_x, right_rel_y, nose_x/w, nose_y/h]
     """
-    n = len(landmarks)
-    has_iris = n > max(LEFT_IRIS + RIGHT_IRIS)
-
-    if has_iris:
-        left_iris  = get_iris_center(landmarks, LEFT_IRIS,  frame_w, frame_h)
-        right_iris = get_iris_center(landmarks, RIGHT_IRIS, frame_w, frame_h)
-
-        li = np.array([landmarks[LEFT_EYE_INNER].x * frame_w, landmarks[LEFT_EYE_INNER].y * frame_h])
-        lo = np.array([landmarks[LEFT_EYE_OUTER].x * frame_w, landmarks[LEFT_EYE_OUTER].y * frame_h])
-        lt = np.array([landmarks[LEFT_EYE_TOP].x   * frame_w, landmarks[LEFT_EYE_TOP].y   * frame_h])
-        lb = np.array([landmarks[LEFT_EYE_BOTTOM].x * frame_w, landmarks[LEFT_EYE_BOTTOM].y * frame_h])
-        ri = np.array([landmarks[RIGHT_EYE_INNER].x * frame_w, landmarks[RIGHT_EYE_INNER].y * frame_h])
-        ro = np.array([landmarks[RIGHT_EYE_OUTER].x * frame_w, landmarks[RIGHT_EYE_OUTER].y * frame_h])
-        rt = np.array([landmarks[RIGHT_EYE_TOP].x   * frame_w, landmarks[RIGHT_EYE_TOP].y   * frame_h])
-        rb = np.array([landmarks[RIGHT_EYE_BOTTOM].x * frame_w, landmarks[RIGHT_EYE_BOTTOM].y * frame_h])
-
-        lx = _eye_ratio(left_iris, li, lo)
-        ly = _eye_ratio(left_iris, lt, lb)
-        rx = _eye_ratio(right_iris, ri, ro)
-        ry = _eye_ratio(right_iris, rt, rb)
-    else:
-        # Fallback: eye-centre + nose (head tracking) when no iris landmarks
-        left = np.mean([[landmarks[i].x * frame_w, landmarks[i].y * frame_h] for i in LEFT_EYE], axis=0)
-        right = np.mean([[landmarks[i].x * frame_w, landmarks[i].y * frame_h] for i in RIGHT_EYE], axis=0)
-        lx, ly = left[0] / frame_w, left[1] / frame_h
-        rx, ry = right[0] / frame_w, right[1] / frame_h
+    (left_rel_x, left_rel_y), (right_rel_x, right_rel_y) = get_relative_iris_position(landmarks, frame_w, frame_h)
 
     nose_x = landmarks[1].x * frame_w
     nose_y = landmarks[1].y * frame_h
 
-    return [lx, ly, rx, ry, nose_x / frame_w, nose_y / frame_h]
+    return [
+        left_rel_x,
+        left_rel_y,
+        right_rel_x,
+        right_rel_y,
+        nose_x / frame_w,
+        nose_y / frame_h,
+    ]
 
 def load_gaze_model(path=None):
     """Load the calibrated gaze model from disk."""
@@ -598,6 +576,7 @@ class GazeHub:
                         if frames_without_face == 60:
                             print('No face detected for ~2s — check lighting and look at the webcam.')
                             frames_without_face = 0
+                        smoother.reset()
                 except Exception as err:
                     print(f'Gaze frame error: {err}')
                     has_face = False
@@ -666,3 +645,4 @@ if __name__ == '__main__':
 if __name__ == '__main__':
     run_tracker()
 """
+
