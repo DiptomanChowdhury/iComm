@@ -8,10 +8,11 @@ from gaze_engine import get_face_landmarker, LEFT_IRIS, RIGHT_IRIS, get_gaze_fea
 
 # The 9 calibration dot positions as fractions of screen size
 # (0.1, 0.1) = top left corner, (0.9, 0.9) = bottom right corner
+# Inset from edges so dots stay visible on all monitors
 CALIBRATION_POINTS = [
-    (0.1, 0.1), (0.5, 0.1), (0.9, 0.1),   # Top row
-    (0.1, 0.5), (0.5, 0.5), (0.9, 0.5),   # Middle row
-    (0.1, 0.9), (0.5, 0.9), (0.9, 0.9),   # Bottom row
+    (0.15, 0.15), (0.5, 0.15), (0.85, 0.15),
+    (0.15, 0.5),  (0.5, 0.5),  (0.85, 0.5),
+    (0.15, 0.85), (0.5, 0.85), (0.85, 0.85),
 ]
 
 SCREEN_W = 1920   # Change to your screen width
@@ -87,7 +88,12 @@ def run_calibration():
     data_dir = Path(__file__).resolve().parent.parent / 'data'
     data_dir.mkdir(parents=True, exist_ok=True)
     output_path = data_dir / 'gaze_model.pkl'
-    joblib.dump({'model_x': model_x, 'model_y': model_y}, output_path)
+    joblib.dump({
+        'model_x': model_x,
+        'model_y': model_y,
+        'screen_w': SCREEN_W,
+        'screen_h': SCREEN_H,
+    }, output_path)
     print(f'Calibration complete! Model saved to {output_path}')
 
 

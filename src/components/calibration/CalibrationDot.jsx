@@ -1,10 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useGazeContext } from '../../context/GazeContext';
-import { useSettingsContext } from '../../context/SettingsContext';
 
 export default React.memo(function CalibrationDot({ num, total, position, onComplete }) {
   const { gazePos } = useGazeContext();
-  const { settings } = useSettingsContext();
   const [progress, setProgress] = useState(0);
   const [isGazing, setIsGazing] = useState(false);
   const [done, setDone] = useState(false);
@@ -16,7 +14,7 @@ export default React.memo(function CalibrationDot({ num, total, position, onComp
     if (!dotRef.current || done) return;
 
     const rect = dotRef.current.getBoundingClientRect();
-    const padding = 60;
+    const padding = 90;
     const isInside =
       gazePos.x >= rect.left - padding &&
       gazePos.x <= rect.right + padding &&
@@ -45,11 +43,13 @@ export default React.memo(function CalibrationDot({ num, total, position, onComp
       setProgress(0);
       setIsGazing(false);
     }
+  }, [gazePos, done, isGazing, onComplete]);
 
+  useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [gazePos, done, isGazing, onComplete]);
+  }, []);
 
   const size = done ? 28 : 24;
   const ringSize = done ? 40 : 60;

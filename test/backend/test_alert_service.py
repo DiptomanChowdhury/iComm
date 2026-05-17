@@ -18,18 +18,31 @@ class TestHealthEndpoint:
     def test_health_returns_ok(self, client):
         response = client.get('/health')
         assert response.status_code == 200
-        assert response.json() == {'status': 'ok'}
+        body = response.json()
+        assert body['status'] == 'ok'
+        assert 'dev_mode' in body
 
 
 class TestSendAlertEndpoint:
-    def test_returns_503_when_twilio_not_configured(self, client, monkeypatch):
+    def test_returns_503_when_twilio_not_configured_and_not_dev(self, client, monkeypatch):
         monkeypatch.delenv('TWILIO_ACCOUNT_SID', raising=False)
         monkeypatch.delenv('TWILIO_AUTH_TOKEN', raising=False)
+        monkeypatch.setattr(alert_service, 'DEV_MODE', False)
         set_twilio_client(None)
 
         response = client.post('/send-alert')
         assert response.status_code == 503
         assert 'Twilio' in response.json()['detail']
+
+    def test_returns_dev_status_when_twilio_missing_in_dev_mode(self, client, monkeypatch):
+        monkeypatch.delenv('TWILIO_ACCOUNT_SID', raising=False)
+        monkeypatch.delenv('TWILIO_AUTH_TOKEN', raising=False)
+        monkeypatch.setattr(alert_service, 'DEV_MODE', True)
+        set_twilio_client(None)
+
+        response = client.post('/send-alert')
+        assert response.status_code == 200
+        assert response.json()['status'] == 'dev'
 
     def test_sends_alert_when_twilio_client_is_mocked(self, client):
         mock_message = MagicMock()
@@ -52,3 +65,26 @@ class TestSendAlertEndpoint:
         assert 'Test Patient' in message
         assert '123 Test St' in message
         assert 'GAZEGUARD EMERGENCY ALERT' in message
+
+
+class TestAdditionalEndpoints:
+    def test_caregiver_alert_dev_mode(self, client, monkeypatch):
+        monkeypatch.setattr(alert_service, 'DEV_MODE', True)
+        monkeypatch.delenv('TWILIO_ACCOUNT_SID', raising=False)
+        monkeypatch.delenv('TWILIO_AUTH_TOKEN', raising=False)
+        set_twilio_client(None)
+        response = client.post('/send-caregiver-alert', json={'message': 'Come here'})
+        assert response.status_code == 200
+
+    def test_quick_message_dev_mode(self, client, monkeypatch):
+        monkeypatch.setattr(alert_service, 'DEV_MODE', True)
+        monkeypatch.delenv('TWILIO_ACCOUNT_SID', raising=False)
+        monkeypatch.delenv('TWILIO_AUTH_TOKEN', raising=False)
+        set_twilio_client(None)
+        response = client.post('/send-quick-message', json={'message': 'I need help'})
+        assert response.status_code == 200
+
+    def test_calibrate_done(self, client):
+        response = client.post('/calibrate-done')
+        assert response.status_code == 200
+        assert response.json()['status'] == 'ok'

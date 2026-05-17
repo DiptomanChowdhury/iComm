@@ -12,10 +12,10 @@ export function GazeProvider({ children }) {
     }
   }, []);
   const { settings } = useSettingsContext();
-  const { gazePos, hasFace, connected } = useGaze(handleBlink, settings.gazeAlpha);
+  const gaze = useGaze(handleBlink, settings.gazeAlpha);
 
   return (
-    <GazeContext.Provider value={{ gazePos, hasFace, connected }}>
+    <GazeContext.Provider value={gaze}>
       {children}
     </GazeContext.Provider>
   );

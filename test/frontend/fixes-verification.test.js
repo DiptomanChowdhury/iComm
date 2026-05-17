@@ -113,13 +113,13 @@ describe('FIX 3 — Calibration Buttons Use DwellButton', () => {
     expect(screen).toContain(`label="Start Calibration"`);
     expect(screen).toContain(`variant="action"`);
     expect(screen).toContain(`ariaLabel="Start eye tracking calibration"`);
-    expect(screen).toContain(`onSelect={() => setPhase('calibrating')}`);
+    expect(screen).toContain('onSelect={startCalibration}');
   });
 
   test('"Continue" button (complete phase) uses DwellButton', () => {
     const screen = readSrc('components/calibration/CalibrationScreen.jsx');
     expect(screen).toContain(`label="Continue"`);
-    expect(screen).toContain(`ariaLabel="Calibration complete`);
+    expect(screen).toContain(`ariaLabel="Close calibration`);
     expect(screen).toContain(`onSelect={onClose}`);
   });
 
@@ -253,12 +253,19 @@ describe('FIX 7 — Settings Persistence', () => {
 describe('FIX 8 — Emergency Backend Calls', () => {
   test('Sidebar.jsx has fetch calls in handleEmergencyAction', () => {
     const sidebar = readSrc('components/layout/Sidebar.jsx');
-    expect(sidebar).toContain(`http://localhost:8000/send-alert`);
-    expect(sidebar).toContain(`http://localhost:8000/send-caregiver-alert`);
-    expect(sidebar).toContain(`http://localhost:8000/send-quick-message`);
-    expect(sidebar).toContain(`fetch(endpoints`);
+    expect(sidebar).toContain(`from '../../utils/postAlert'`);
+    expect(sidebar).toContain(`postAlert(action`);
     expect(sidebar).toContain(`startCooldown(action)`);
     expect(sidebar).toContain(`setEmergencyModal(null)`);
+  });
+
+  test('config/api.js defines local defaults and endpoint paths', () => {
+    const api = readSrc('config/api.js');
+    expect(api).toContain(`http://localhost:8000`);
+    expect(api).toContain(`ws://localhost:8765`);
+    expect(api).toContain(`/send-alert`);
+    expect(api).toContain(`/send-caregiver-alert`);
+    expect(api).toContain(`/send-quick-message`);
   });
 
   test('handleEmergencyAction correct dependency array', () => {
@@ -293,8 +300,9 @@ describe('FIX 10 — Gaze Smoothing', () => {
   test('smoothedRef applies exponential smoothing to coordinates', () => {
     const gaze = readSrc('hooks/useGaze.js');
     expect(gaze).toContain(`const smoothedRef = useRef`);
-    expect(gaze).toContain(`alpha * data.gazex`);
-    expect(gaze).toContain(`alpha * data.gazey`);
+    expect(gaze).toContain(`export function screenToViewport`);
+    expect(gaze).toContain(`alpha * x`);
+    expect(gaze).toContain(`alpha * y`);
     expect(gaze).toContain(`(1 - alpha) *`);
   });
 
@@ -319,7 +327,7 @@ describe('FIX 11 — hasFace Debounce', () => {
     const gaze = readSrc('hooks/useGaze.js');
     expect(gaze).toContain(`faceTimeoutRef`);
     expect(gaze).toContain(`setTimeout`);
-    expect(gaze).toContain(`, 500)`);
+    expect(gaze).toContain(`FACE_LOST_DEBOUNCE_MS`);
   });
 
   test('hasFace true is set immediately, false is debounced', () => {
@@ -386,8 +394,8 @@ describe('FIX 13 — useTTS Hook in Sidebar', () => {
 describe('Round 3 — FIX 1: gazeAlpha ref in WebSocket closure', () => {
   test('gazeAlphaRef is declared and synced via useEffect', () => {
     const gaze = readSrc('hooks/useGaze.js');
-    expect(gaze).toContain('const gazeAlphaRef = useRef(gazeAlpha ?? 0.3)');
-    expect(gaze).toContain('gazeAlphaRef.current = gazeAlpha ?? 0.3');
+    expect(gaze).toContain('const gazeAlphaRef = useRef(gazeAlpha ?? 1)');
+    expect(gaze).toContain('gazeAlphaRef.current = gazeAlpha ?? 1');
   });
 
   test('ws.onmessage reads gazeAlphaRef.current instead of captured gazeAlpha', () => {
