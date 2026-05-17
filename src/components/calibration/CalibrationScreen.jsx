@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import CalibrationDot from './CalibrationDot';
 import DwellButton from '../core/DwellButton';
 import { useSettingsContext } from '../../context/SettingsContext';
@@ -24,6 +24,8 @@ export default React.memo(function CalibrationScreen({ onClose }) {
   const [currentDot, setCurrentDot] = useState(0);
   const [positionsPx, setPositionsPx] = useState([]);
   const [sampleProgress, setSampleProgress] = useState(0);
+  const [disconnected, setDisconnected] = useState(false);
+  const calibrationActiveRef = useRef(false);
   const { updateSetting } = useSettingsContext();
   const { sendMessage, connected } = useGazeContext();
 
@@ -46,6 +48,7 @@ export default React.memo(function CalibrationScreen({ onClose }) {
 
   useEffect(() => {
     const onReady = () => {
+      if (!calibrationActiveRef.current) return;
       updateSetting('calibrated', true);
       setPhase('complete');
     };
@@ -59,6 +62,14 @@ export default React.memo(function CalibrationScreen({ onClose }) {
       window.removeEventListener('gaze-calib-progress', onProgress);
     };
   }, [updateSetting]);
+
+  useEffect(() => {
+    if (calibrationActiveRef.current && !connected) {
+      setDisconnected(true);
+    } else if (connected) {
+      setDisconnected(false);
+    }
+  }, [connected]);
 
   useEffect(() => {
     if (phase !== 'calibrating' || positionsPx.length === 0) return;
@@ -76,6 +87,7 @@ export default React.memo(function CalibrationScreen({ onClose }) {
       window.alert('Gaze engine not connected. Run: npm run backend:gaze');
       return;
     }
+    calibrationActiveRef.current = true;
     sendMessage({
       type: 'calib_start',
       screen_w: window.innerWidth,
@@ -83,6 +95,7 @@ export default React.memo(function CalibrationScreen({ onClose }) {
     });
     setCurrentDot(0);
     setPhase('calibrating');
+    setDisconnected(false);
   }, [connected, sendMessage]);
 
   const handleDotComplete = useCallback(() => {
@@ -95,9 +108,31 @@ export default React.memo(function CalibrationScreen({ onClose }) {
   }, [currentDot, sendMessage]);
 
   const handleCancel = useCallback(() => {
+    calibrationActiveRef.current = false;
     sendMessage({ type: 'calib_cancel' });
     onClose();
   }, [sendMessage, onClose]);
+
+  const handleRetry = useCallback(() => {
+    setDisconnected(false);
+    setPhase('intro');
+  }, []);
+
+  if (disconnected) {
+    return (
+      <div style={overlayStyle}>
+        <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: '#ff6b6b' }}>
+          Connection Lost
+        </h1>
+        <p style={{ fontSize: 'var(--text-lg)', color: 'var(--text-secondary)', textAlign: 'center' }}>
+          Gaze engine disconnected during calibration.
+          Run <code>npm run backend:gaze</code> and try again.
+        </p>
+        <DwellButton label="Back to Start" variant="action" size="lg" onSelect={handleRetry} />
+        <DwellButton label="Cancel" variant="key" size="md" onSelect={onClose} />
+      </div>
+    );
+  }
 
   if (phase === 'intro') {
     return (
@@ -106,8 +141,8 @@ export default React.memo(function CalibrationScreen({ onClose }) {
           Eye Tracking Calibration
         </h1>
         <p style={{ fontSize: 'var(--text-lg)', color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 520 }}>
-          Look at each green dot and hold your gaze until the ring completes.
-          This trains the gaze model for <strong>this browser window</strong>.
+          Look at each green dot, then <strong>long-blink</strong> (hold eyes closed 600ms+) to confirm.
+          Short-blink cancels and lets you retry.
         </p>
         {!connected && (
           <p style={{ color: '#ff6b6b', fontSize: 'var(--text-sm)' }}>

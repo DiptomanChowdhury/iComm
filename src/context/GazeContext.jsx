@@ -7,8 +7,9 @@ export const GazeContext = createContext(null);
 export function GazeProvider({ children }) {
   const handleBlink = useCallback((blinkType) => {
     if (blinkType === 'long_blink') {
-      const event = new CustomEvent('long-blink');
-      window.dispatchEvent(event);
+      window.dispatchEvent(new CustomEvent('long-blink'));
+    } else if (blinkType === 'short_blink') {
+      window.dispatchEvent(new CustomEvent('short-blink'));
     }
   }, []);
   const { settings } = useSettingsContext();
