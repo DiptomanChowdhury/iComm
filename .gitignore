@@ -1,2 +1,9 @@
 __pycache__/
+.venv/
+venv/
 node_modules/
+.pytest_cache/
+.env
+Backend/.env
+data/gaze_model.pkl
+Backend/models/face_landmarker.task

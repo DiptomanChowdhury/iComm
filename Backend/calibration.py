@@ -4,7 +4,7 @@ import numpy as np
 import time
 import joblib
 from sklearn.linear_model import Ridge
-from gaze_engine import face_mesh, LEFT_IRIS, RIGHT_IRIS, get_gaze_features
+from gaze_engine import get_face_landmarker, LEFT_IRIS, RIGHT_IRIS, get_gaze_features
 
 # The 9 calibration dot positions as fractions of screen size
 # (0.1, 0.1) = top left corner, (0.9, 0.9) = bottom right corner
@@ -58,10 +58,10 @@ def run_calibration():
 
             frame = cv2.flip(frame, 1)
             rgb   = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = face_mesh.process(rgb)
+            result = get_face_landmarker().process(rgb)
 
-            if results.multi_face_landmarks:
-                lm = results.multi_face_landmarks[0].landmark
+            if result.face_landmarks:
+                lm = result.face_landmarks[0]
                 h, w = frame.shape[:2]
                 features = get_gaze_features(lm, w, h)
 
@@ -80,22 +80,28 @@ def run_calibration():
     cap.release()
     cv2.destroyAllWindows()
 
-    # Train the Ridge Regression model
     print('Training gaze model...')
-    X = np.array(all_features)       # Shape: (270, 6)  — 270 samples, 6 features each
-    y_x = np.array(all_targets_x)   # Shape: (270,)    — screen X targets
-    y_y = np.array(all_targets_y)   # Shape: (270,)    — screen Y targets
+    model_x, model_y = train_gaze_model(all_features, all_targets_x, all_targets_y)
 
-    model_x = Ridge(alpha=1.0)   # Predicts screen X from eye features
-    model_y = Ridge(alpha=1.0)   # Predicts screen Y from eye features
+    from pathlib import Path
+    data_dir = Path(__file__).resolve().parent.parent / 'data'
+    data_dir.mkdir(parents=True, exist_ok=True)
+    output_path = data_dir / 'gaze_model.pkl'
+    joblib.dump({'model_x': model_x, 'model_y': model_y}, output_path)
+    print(f'Calibration complete! Model saved to {output_path}')
+
+
+def train_gaze_model(all_features, all_targets_x, all_targets_y):
+    """Train Ridge regression models mapping eye features to screen coordinates."""
+    X = np.array(all_features)
+    y_x = np.array(all_targets_x)
+    y_y = np.array(all_targets_y)
+
+    model_x = Ridge(alpha=1.0)
+    model_y = Ridge(alpha=1.0)
     model_x.fit(X, y_x)
     model_y.fit(X, y_y)
-
-    # Save both models to disk so we never need to re-calibrate
-    import os
-    os.makedirs('../data', exist_ok=True)
-    joblib.dump({'model_x': model_x, 'model_y': model_y}, '../data/gaze_model.pkl')
-    print('Calibration complete! Model saved to data/gaze_model.pkl')
+    return model_x, model_y
 
 
 
