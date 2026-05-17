@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Test</title>
+</head>
+<body>
+
+<h1>Gaze Engine Test</h1>
+
+<script>
+const socket = new WebSocket("ws://localhost:8765");
+
+socket.onopen = () => {
+    console.log("Connected to backend");
+};
+
+socket.onmessage = (event) => {
+    console.log("Received:", event.data);
+};
+
+socket.onerror = (error) => {
+    console.log("WebSocket Error:", error);
+};
+</script>
+
+</body>
+</html>
