@@ -240,19 +240,29 @@ SCREEN_W = 1920
 SCREEN_H = 1080
 
 
-def build_gaze_payload(gaze_x, gaze_y, blink_type, has_face, screen_w=None, screen_h=None):
+def build_gaze_payload(
+    gaze_x, gaze_y, blink_type, has_face,
+    screen_w=None, screen_h=None,
+    model_ready=False, calib_progress=None, calib_point=None,
+):
     """
     WebSocket message shape expected by frontend useGaze.js.
     Keys must be gazex / gazey / hasface (not gaze_x / has_face).
     """
-    return {
+    payload = {
         'gazex': int(gaze_x),
         'gazey': int(gaze_y),
         'screenw': int(screen_w if screen_w is not None else SCREEN_W),
         'screenh': int(screen_h if screen_h is not None else SCREEN_H),
         'blink': blink_type,
         'hasface': bool(has_face),
+        'model_ready': bool(model_ready),
     }
+    if calib_progress is not None:
+        payload['calib_progress'] = int(calib_progress)
+    if calib_point is not None:
+        payload['calib_point'] = int(calib_point)
+    return payload
 
 
 def estimate_gaze_from_iris(lm, frame_w, frame_h, screen_w, screen_h):
@@ -347,10 +357,94 @@ class GazeHub:
     Avoids Windows camera lock when the UI reconnects or opens multiple tabs.
     """
 
+    CALIB_SAMPLES_PER_POINT = 30
+
     def __init__(self):
         self._clients = set()
         self._task = None
         self._landmarker = None
+        self.calibrated = False
+        self.model_x = None
+        self.model_y = None
+        self.screen_w = SCREEN_W
+        self.screen_h = SCREEN_H
+        self._calib_active = False
+        self._calib_features = []
+        self._calib_tx = []
+        self._calib_ty = []
+        self._calib_target = None
+        self._calib_point_idx = 0
+        self._calib_samples_this_point = 0
+        self._model_ready_broadcast = False
+
+    def handle_client_message(self, data):
+        """Handle calibration commands from the browser UI."""
+        msg_type = data.get('type')
+        if msg_type == 'calib_start':
+            self._calib_active = True
+            self._calib_features = []
+            self._calib_tx = []
+            self._calib_ty = []
+            self._calib_point_idx = 0
+            self._calib_samples_this_point = 0
+            self._calib_target = None
+            self.screen_w = int(data.get('screen_w', SCREEN_W))
+            self.screen_h = int(data.get('screen_h', SCREEN_H))
+            self.calibrated = False
+            print(f'UI calibration started ({self.screen_w}x{self.screen_h})')
+        elif msg_type == 'calib_point':
+            self._calib_target = (
+                int(data['target_x']),
+                int(data['target_y']),
+            )
+            self._calib_samples_this_point = 0
+            print(f'Calib point {self._calib_point_idx + 1}: target {self._calib_target}')
+        elif msg_type == 'calib_point_done':
+            self._calib_point_idx += 1
+            self._calib_target = None
+            if self._calib_point_idx >= 9:
+                self._finish_ui_calibration()
+        elif msg_type == 'calib_cancel':
+            self._calib_active = False
+            self._calib_target = None
+            print('UI calibration cancelled')
+
+    def _finish_ui_calibration(self):
+        self._calib_active = False
+        if len(self._calib_features) < 27:
+            print(f'Calibration failed: only {len(self._calib_features)} samples collected')
+            return
+        try:
+            from calibration import train_gaze_model
+            model_x, model_y = train_gaze_model(
+                self._calib_features, self._calib_tx, self._calib_ty,
+            )
+            data_dir = Path(__file__).resolve().parent.parent / 'data'
+            data_dir.mkdir(parents=True, exist_ok=True)
+            output_path = data_dir / 'gaze_model.pkl'
+            joblib.dump({
+                'model_x': model_x,
+                'model_y': model_y,
+                'screen_w': self.screen_w,
+                'screen_h': self.screen_h,
+            }, output_path)
+            self.model_x = model_x
+            self.model_y = model_y
+            self.calibrated = True
+            self._model_ready_broadcast = True
+            print(f'UI calibration saved to {output_path} ({self.screen_w}x{self.screen_h})')
+        except Exception as err:
+            print(f'Calibration training failed: {err}')
+
+    def _reload_gaze_model(self):
+        try:
+            self.model_x, self.model_y, self.screen_w, self.screen_h = load_gaze_model()
+            self.calibrated = True
+            print(f'Calibration model loaded ({self.screen_w}x{self.screen_h}).')
+        except (FileNotFoundError, OSError, KeyError, ValueError) as err:
+            self.calibrated = False
+            self.model_x = self.model_y = None
+            print(f'No calibration model ({err}). Using iris estimate; use in-app or backend calibration.')
 
     async def register(self, websocket):
         self._clients.add(websocket)
@@ -384,16 +478,7 @@ class GazeHub:
         smoother = GazeSmoother(alpha=0.2)
         blink_d = BlinkDetector()
         frames_without_face = 0
-
-        screen_w, screen_h = SCREEN_W, SCREEN_H
-        try:
-            model_x, model_y, screen_w, screen_h = load_gaze_model()
-            calibrated = True
-            print(f'Calibration model loaded ({screen_w}x{screen_h}).')
-        except (FileNotFoundError, OSError, KeyError, ValueError) as err:
-            calibrated = False
-            model_x = model_y = None
-            print(f'No calibration model ({err}). Using iris estimate; run calibration.py for accuracy.')
+        self._reload_gaze_model()
 
         try:
             while self._clients:
@@ -407,6 +492,8 @@ class GazeHub:
 
                 gaze_x, gaze_y, blink_type = 0, 0, None
                 has_face = False
+                calib_progress = None
+                calib_point = None
 
                 try:
                     result = self._landmarker.process(rgb)
@@ -422,12 +509,27 @@ class GazeHub:
                         ear = (calculate_ear(left_eye) + calculate_ear(right_eye)) / 2.0
                         blink_type = blink_d.update(ear)
 
-                        if calibrated:
+                        if self._calib_active and self._calib_target is not None:
                             features = get_gaze_features(lm, w, h)
-                            raw_x, raw_y = predict_gaze(model_x, model_y, features)
+                            self._calib_features.append(features)
+                            self._calib_tx.append(self._calib_target[0])
+                            self._calib_ty.append(self._calib_target[1])
+                            self._calib_samples_this_point += 1
+                            gaze_x, gaze_y = self._calib_target
+                            calib_progress = self._calib_samples_this_point
+                            calib_point = self._calib_point_idx + 1
+                        elif self.calibrated:
+                            features = get_gaze_features(lm, w, h)
+                            raw_x, raw_y = predict_gaze(self.model_x, self.model_y, features)
                             gaze_x, gaze_y = smoother.update(raw_x, raw_y)
+                            calib_progress = None
+                            calib_point = None
                         else:
-                            gaze_x, gaze_y = estimate_gaze_from_iris(lm, w, h, screen_w, screen_h)
+                            gaze_x, gaze_y = estimate_gaze_from_iris(
+                                lm, w, h, self.screen_w, self.screen_h,
+                            )
+                            calib_progress = None
+                            calib_point = None
                     else:
                         frames_without_face += 1
                         if frames_without_face == 60:
@@ -437,8 +539,16 @@ class GazeHub:
                     print(f'Gaze frame error: {err}')
                     has_face = False
 
+                model_ready = self._model_ready_broadcast
+                if model_ready:
+                    self._model_ready_broadcast = False
+
                 message = json.dumps(build_gaze_payload(
-                    gaze_x, gaze_y, blink_type, has_face, screen_w, screen_h,
+                    gaze_x, gaze_y, blink_type, has_face,
+                    self.screen_w, self.screen_h,
+                    model_ready=model_ready,
+                    calib_progress=calib_progress if self._calib_active else None,
+                    calib_point=calib_point if self._calib_active else None,
                 ))
 
                 dead = []
@@ -466,7 +576,15 @@ async def gaze_server(websocket):
     """WebSocket handler — one shared camera loop fans out to all clients."""
     await _gaze_hub.register(websocket)
     try:
-        await websocket.wait_closed()
+        async for raw in websocket:
+            try:
+                text = raw.decode() if isinstance(raw, bytes) else raw
+                data = json.loads(text)
+                _gaze_hub.handle_client_message(data)
+            except (json.JSONDecodeError, TypeError, KeyError):
+                pass
+    except websockets.exceptions.ConnectionClosed:
+        pass
     finally:
         await _gaze_hub.unregister(websocket)
 

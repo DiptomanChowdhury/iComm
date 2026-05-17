@@ -134,8 +134,30 @@ async def send_quick_message(body: Optional[AlertBody] = None):
 
 @app.post('/calibrate-done')
 async def calibrate_done():
-    """Acknowledge UI calibration flow (ML training is via calibration.py)."""
-    return {'status': 'ok', 'note': 'Run npm run backend:calibrate for gaze model training.'}
+    """Acknowledge UI calibration flow (ML training is via WebSocket or calibration.py)."""
+    return {'status': 'ok', 'model_loaded': _gaze_model_exists()}
+
+
+@app.get('/gaze/status')
+async def gaze_status():
+    """Report whether a trained gaze model exists on disk."""
+    path = Path(__file__).resolve().parent.parent / 'data' / 'gaze_model.pkl'
+    if not path.exists():
+        return {'model_loaded': False, 'screen_w': None, 'screen_h': None}
+    try:
+        import joblib
+        data = joblib.load(path)
+        return {
+            'model_loaded': True,
+            'screen_w': data.get('screen_w'),
+            'screen_h': data.get('screen_h'),
+        }
+    except Exception:
+        return {'model_loaded': False, 'screen_w': None, 'screen_h': None}
+
+
+def _gaze_model_exists():
+    return (Path(__file__).resolve().parent.parent / 'data' / 'gaze_model.pkl').exists()
 
 
 @app.get('/health')

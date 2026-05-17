@@ -165,6 +165,7 @@ class TestWebSocketPayload:
             'screenh': 1080,
             'blink': 'short_blink',
             'hasface': True,
+            'model_ready': False,
         }
 
     def test_payload_serializes_to_json(self):

@@ -113,13 +113,13 @@ describe('FIX 3 — Calibration Buttons Use DwellButton', () => {
     expect(screen).toContain(`label="Start Calibration"`);
     expect(screen).toContain(`variant="action"`);
     expect(screen).toContain(`ariaLabel="Start eye tracking calibration"`);
-    expect(screen).toContain(`onSelect={() => setPhase('calibrating')}`);
+    expect(screen).toContain('onSelect={startCalibration}');
   });
 
   test('"Continue" button (complete phase) uses DwellButton', () => {
     const screen = readSrc('components/calibration/CalibrationScreen.jsx');
     expect(screen).toContain(`label="Continue"`);
-    expect(screen).toContain(`ariaLabel="Calibration complete`);
+    expect(screen).toContain(`ariaLabel="Close calibration`);
     expect(screen).toContain(`onSelect={onClose}`);
   });
 

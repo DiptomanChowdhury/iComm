@@ -5,15 +5,16 @@ const RECONNECT_DELAY = 2000;
 const FACE_LOST_DEBOUNCE_MS = 800;
 const WARMUP_MS = 2500;
 
-/** Map backend screen pixels to this browser window's viewport. */
+/** Map backend screen-space gaze (0..screenW/H) to this window's viewport pixels. */
 export function screenToViewport(gazex, gazey, screenW, screenH) {
-  const sx = window.screenX ?? 0;
-  const sy = window.screenY ?? 0;
   const vw = window.innerWidth || screenW;
   const vh = window.innerHeight || screenH;
-  const x = ((gazex - sx) / screenW) * vw;
-  const y = ((gazey - sy) / screenH) * vh;
-  return { x, y };
+  const w = screenW > 0 ? screenW : vw;
+  const h = screenH > 0 ? screenH : vh;
+  return {
+    x: (gazex / w) * vw,
+    y: (gazey / h) * vh,
+  };
 }
 
 export default function useGaze(onBlink, gazeAlpha) {
@@ -31,6 +32,14 @@ export default function useGaze(onBlink, gazeAlpha) {
   const gazeAlphaRef = useRef(gazeAlpha ?? 1);
   const screenSizeRef = useRef({ w: GAZE_SCREEN_W, h: GAZE_SCREEN_H });
   const unmountedRef = useRef(false);
+  const wsOpenRef = useRef(false);
+
+  const sendMessage = useCallback((payload) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(payload));
+    }
+  }, []);
 
   useEffect(() => { onBlinkRef.current = onBlink; }, [onBlink]);
   useEffect(() => { gazeAlphaRef.current = gazeAlpha ?? 1; }, [gazeAlpha]);
@@ -50,6 +59,7 @@ export default function useGaze(onBlink, gazeAlpha) {
           ws.close();
           return;
         }
+        wsOpenRef.current = true;
         setConnected(true);
         setWarmup(true);
         clearTimeout(warmupTimerRef.current);
@@ -94,12 +104,21 @@ export default function useGaze(onBlink, gazeAlpha) {
           if (data.blink && onBlinkRef.current) {
             onBlinkRef.current(data.blink);
           }
+          if (data.model_ready === true) {
+            window.dispatchEvent(new CustomEvent('gaze-model-ready'));
+          }
+          if (data.calib_progress != null) {
+            window.dispatchEvent(new CustomEvent('gaze-calib-progress', {
+              detail: { samples: data.calib_progress, point: data.calib_point },
+            }));
+          }
         } catch (e) {
           // ignore parse errors
         }
       };
 
       ws.onclose = () => {
+        wsOpenRef.current = false;
         setConnected(false);
         setHasFace(false);
         setStreamLive(false);
@@ -141,5 +160,5 @@ export default function useGaze(onBlink, gazeAlpha) {
     };
   }, [connect]);
 
-  return { gazePos, hasFace, connected, streamLive, warmup };
+  return { gazePos, hasFace, connected, streamLive, warmup, sendMessage };
 }

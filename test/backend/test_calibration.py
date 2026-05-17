@@ -10,9 +10,9 @@ class TestCalibrationGrid:
         assert len(CALIBRATION_POINTS) == 9
 
     def test_corners_and_center_present(self):
-        assert (0.1, 0.1) in CALIBRATION_POINTS
+        assert (0.15, 0.15) in CALIBRATION_POINTS
         assert (0.5, 0.5) in CALIBRATION_POINTS
-        assert (0.9, 0.9) in CALIBRATION_POINTS
+        assert (0.85, 0.85) in CALIBRATION_POINTS
 
     def test_all_points_are_normalized_fractions(self):
         for x_frac, y_frac in CALIBRATION_POINTS:

@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
+import { gazeStatusUrl } from '../config/api';
 
 const STORAGE_KEY = 'icomm-settings';
 
 const DEFAULT_SETTINGS = {
   dwellTime: 1500,
-  gazeAlpha: 1,
+  gazeAlpha: 0.35,
   language: 'en',
   speechRate: 0.85,
   speechPitch: 1.0,
@@ -36,6 +37,23 @@ export default function useSettings() {
     } catch {
       // ignore corrupt storage
     }
+  }, []);
+
+  useEffect(() => {
+    fetch(gazeStatusUrl())
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.model_loaded) {
+          setSettings((prev) => {
+            const next = { ...prev, calibrated: true };
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+            } catch { /* ignore */ }
+            return next;
+          });
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const persist = useCallback((newSettings) => {

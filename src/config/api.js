@@ -59,6 +59,10 @@ export function apiUrl(path) {
   return `${base}${suffix}`;
 }
 
+export function gazeStatusUrl() {
+  return apiUrl('/gaze/status');
+}
+
 export const ALERT_ENDPOINTS = {
   emergency: apiUrl('/send-alert'),
   caregiver: apiUrl('/send-caregiver-alert'),
