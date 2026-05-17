@@ -1,0 +1,27 @@
+{
+  "scripts": {
+    "dev": "vite",
+    "start": "vite preview",
+    "build": "vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:frontend": "vitest run",
+    "test:backend": "python -m pytest test/backend",
+    "setup:venv": "powershell -NoProfile -File scripts/setup-venv.ps1",
+    "backend:gaze": "powershell -NoProfile -File scripts/run-gaze.ps1",
+    "backend:calibrate": "powershell -NoProfile -File scripts/run-calibrate.ps1",
+    "backend:alert": "powershell -NoProfile -File scripts/run-alert.ps1"
+  },
+  "dependencies": {
+    "@isomorphic-git/lightning-fs": "^4.6.2",
+    "isomorphic-git": "^1.38.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.5.2",
+    "jsdom": "^29.1.1",
+    "vite": "^6.3.5",
+    "vitest": "^4.1.6"
+  }
+}

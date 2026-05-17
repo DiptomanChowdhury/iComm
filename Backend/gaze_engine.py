@@ -1,25 +1,91 @@
 # gaze_engine.py
 # This is the main eye tracking engine for iComm
 
-import cv2          # OpenCV - opens webcam and processes images
-import mediapipe as mp   # Google's library for face landmark detection
-import numpy as np  # Math library for calculations
-import time         # For measuring how long a blink lasts
+import asyncio
+import cv2
+import json
+import joblib
+import numpy as np
+import os
+import sys
+import time
+from pathlib import Path
 
-# MediaPipe Setup
-# This loads the FaceMesh model into memory
-mp_face_mesh = mp.solutions.face_mesh
-mp_drawing   = mp.solutions.drawing_utils
-
-# Create the FaceMesh detector
-# refine_landmarks=True gives us precise iris positions 
-# min_detection_confidence=0.5 means it only reports a face if 50%+ sure
-face_mesh = mp_face_mesh.FaceMesh(
-    max_num_faces=1,
-    refine_landmarks=True,
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
+MODEL_URL = (
+    'https://storage.googleapis.com/mediapipe-models/face_landmarker/'
+    'face_landmarker/float16/1/face_landmarker.task'
 )
+MODEL_PATH = Path(__file__).resolve().parent / 'models' / 'face_landmarker.task'
+
+_face_landmarker = None
+
+
+def ensure_face_landmarker_model():
+    """Download the Face Landmarker model if missing."""
+    if MODEL_PATH.exists():
+        return str(MODEL_PATH)
+
+    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    print(f'Downloading face landmarker model to {MODEL_PATH} ...')
+    import urllib.request
+    urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+    print('Model download complete.')
+    return str(MODEL_PATH)
+
+
+class FaceLandmarkerProcessor:
+    """MediaPipe Tasks API wrapper (replaces removed mp.solutions.face_mesh)."""
+
+    def __init__(self):
+        import mediapipe as mp
+        from mediapipe.tasks import python as mp_tasks
+        from mediapipe.tasks.python import vision
+
+        options = vision.FaceLandmarkerOptions(
+            base_options=mp_tasks.BaseOptions(model_asset_path=ensure_face_landmarker_model()),
+            running_mode=vision.RunningMode.IMAGE,
+            num_faces=1,
+            min_face_detection_confidence=0.3,
+            min_face_presence_confidence=0.3,
+            min_tracking_confidence=0.3,
+        )
+        self._mp = mp
+        self._landmarker = vision.FaceLandmarker.create_from_options(options)
+
+    def process(self, rgb_frame):
+        """Process an RGB numpy frame; returns a FaceLandmarkerResult."""
+        mp_image = self._mp.Image(
+            image_format=self._mp.ImageFormat.SRGB,
+            data=np.ascontiguousarray(rgb_frame),
+        )
+        return self._landmarker.detect(mp_image)
+
+    def close(self):
+        self._landmarker.close()
+
+
+def open_webcam(index=0):
+    """Open the default or configured webcam (Windows-friendly)."""
+    if sys.platform == 'win32':
+        cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+        if cap.isOpened():
+            return cap
+    cap = cv2.VideoCapture(index)
+    if cap.isOpened():
+        return cap
+    return cv2.VideoCapture(index)
+
+
+def get_face_landmarker():
+    """Lazy-load Face Landmarker (MediaPipe Tasks API)."""
+    global _face_landmarker
+    if _face_landmarker is None:
+        _face_landmarker = FaceLandmarkerProcessor()
+    return _face_landmarker
+
+
+# Backwards-compatible alias used by calibration.py
+get_face_mesh = get_face_landmarker
 
 # These are the index numbers of the landmarks around each eye.
 # Think of them as seat numbers in a stadium — each number is always the same seat.
@@ -118,7 +184,7 @@ def run_tracker():
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         # Run FaceMesh on this frame — get all 468 landmarks
-        results = face_mesh.process(rgb_frame)
+        results = get_face_mesh().process(rgb_frame)
 
         if results.multi_face_landmarks:
             # At least one face detected — get the first one
@@ -167,90 +233,361 @@ def run_tracker():
     
 """
 
-import asyncio
 import websockets
-import json
+
+# Keep in sync with Backend/calibration.py SCREEN_W / SCREEN_H
+SCREEN_W = 1920
+SCREEN_H = 1080
+
+
+def build_gaze_payload(
+    gaze_x, gaze_y, blink_type, has_face,
+    screen_w=None, screen_h=None,
+    model_ready=False, calib_progress=None, calib_point=None,
+):
+    """
+    WebSocket message shape expected by frontend useGaze.js.
+    Keys must be gazex / gazey / hasface (not gaze_x / has_face).
+    """
+    payload = {
+        'gazex': int(gaze_x),
+        'gazey': int(gaze_y),
+        'screenw': int(screen_w if screen_w is not None else SCREEN_W),
+        'screenh': int(screen_h if screen_h is not None else SCREEN_H),
+        'blink': blink_type,
+        'hasface': bool(has_face),
+        'model_ready': bool(model_ready),
+    }
+    if calib_progress is not None:
+        payload['calib_progress'] = int(calib_progress)
+    if calib_point is not None:
+        payload['calib_point'] = int(calib_point)
+    return payload
+
+
+def estimate_gaze_from_iris(lm, frame_w, frame_h, screen_w, screen_h):
+    """Rough screen gaze from iris or eye-centre when ML calibration is missing."""
+    n = len(lm)
+    try:
+        if n > max(LEFT_IRIS + RIGHT_IRIS):
+            left = get_iris_center(lm, LEFT_IRIS, frame_w, frame_h)
+            right = get_iris_center(lm, RIGHT_IRIS, frame_w, frame_h)
+        else:
+            left = np.mean([[lm[i].x * frame_w, lm[i].y * frame_h] for i in LEFT_EYE], axis=0)
+            right = np.mean([[lm[i].x * frame_w, lm[i].y * frame_h] for i in RIGHT_EYE], axis=0)
+    except (IndexError, TypeError):
+        left = np.array([frame_w * 0.4, frame_h * 0.5])
+        right = np.array([frame_w * 0.6, frame_h * 0.5])
+    cx = (left[0] + right[0]) / 2
+    cy = (left[1] + right[1]) / 2
+    gaze_x = int(np.clip(cx / frame_w * screen_w, 0, screen_w - 1))
+    gaze_y = int(np.clip(cy / frame_h * screen_h, 0, screen_h - 1))
+    return gaze_x, gaze_y
+
+def get_iris_center(landmarks, iris_indices, frame_w, frame_h):
+    """
+    Get the center (x, y) of an iris in pixel coordinates.
+    MediaPipe gives us 4 points around each iris — we average them.
+    """
+    points = np.array([
+        [landmarks[i].x * frame_w, landmarks[i].y * frame_h]
+        for i in iris_indices
+    ])
+    center = points.mean(axis=0)
+    return center
+
+def get_gaze_features(landmarks, frame_w, frame_h):
+    """
+    Get the combined gaze feature vector for the ML model.
+    We use both iris positions plus the head pose (nose tip position).
+    """
+    left_iris  = get_iris_center(landmarks, LEFT_IRIS,  frame_w, frame_h)
+    right_iris = get_iris_center(landmarks, RIGHT_IRIS, frame_w, frame_h)
+
+    nose_x = landmarks[1].x * frame_w
+    nose_y = landmarks[1].y * frame_h
+
+    return [
+        left_iris[0]  / frame_w,
+        left_iris[1]  / frame_h,
+        right_iris[0] / frame_w,
+        right_iris[1] / frame_h,
+        nose_x        / frame_w,
+        nose_y        / frame_h,
+    ]
+
+def load_gaze_model(path=None):
+    """Load the calibrated gaze model from disk."""
+    if path is None:
+        path = Path(__file__).resolve().parent.parent / 'data' / 'gaze_model.pkl'
+    data = joblib.load(path)
+    screen_w = data.get('screen_w', SCREEN_W)
+    screen_h = data.get('screen_h', SCREEN_H)
+    return data['model_x'], data['model_y'], screen_w, screen_h
+
+def predict_gaze(model_x, model_y, features):
+    """Predict screen (x, y) in pixels from a 6-feature eye vector."""
+    X = np.array(features).reshape(1, -1)
+    screen_x = model_x.predict(X)[0]
+    screen_y = model_y.predict(X)[0]
+    return int(screen_x), int(screen_y)
 
 class GazeSmoother:
     def __init__(self, alpha=0.2):
         self.alpha = alpha
-        self.prev_x = None
-        self.prev_y = None
+        self.smooth_x = None
+        self.smooth_y = None
 
-    def smooth(self, x, y):
-        if self.prev_x is None:
-            self.prev_x = x
-            self.prev_y = y
+    def update(self, raw_x, raw_y):
+        if self.smooth_x is None:
+            self.smooth_x = raw_x
+            self.smooth_y = raw_y
         else:
-            self.prev_x = self.alpha * x + (1 - self.alpha) * self.prev_x
-            self.prev_y = self.alpha * y + (1 - self.alpha) * self.prev_y
+            self.smooth_x = self.alpha * raw_x + (1 - self.alpha) * self.smooth_x
+            self.smooth_y = self.alpha * raw_y + (1 - self.alpha) * self.smooth_y
+        return int(self.smooth_x), int(self.smooth_y)
 
-        return self.prev_x, self.prev_y
+    def reset(self):
+        self.smooth_x = None
+        self.smooth_y = None
+
+class GazeHub:
+    """
+    One webcam + inference loop shared by all browser tabs.
+    Avoids Windows camera lock when the UI reconnects or opens multiple tabs.
+    """
+
+    CALIB_SAMPLES_PER_POINT = 30
+
+    def __init__(self):
+        self._clients = set()
+        self._task = None
+        self._landmarker = None
+        self.calibrated = False
+        self.model_x = None
+        self.model_y = None
+        self.screen_w = SCREEN_W
+        self.screen_h = SCREEN_H
+        self._calib_active = False
+        self._calib_features = []
+        self._calib_tx = []
+        self._calib_ty = []
+        self._calib_target = None
+        self._calib_point_idx = 0
+        self._calib_samples_this_point = 0
+        self._model_ready_broadcast = False
+
+    def handle_client_message(self, data):
+        """Handle calibration commands from the browser UI."""
+        msg_type = data.get('type')
+        if msg_type == 'calib_start':
+            self._calib_active = True
+            self._calib_features = []
+            self._calib_tx = []
+            self._calib_ty = []
+            self._calib_point_idx = 0
+            self._calib_samples_this_point = 0
+            self._calib_target = None
+            self.screen_w = int(data.get('screen_w', SCREEN_W))
+            self.screen_h = int(data.get('screen_h', SCREEN_H))
+            self.calibrated = False
+            print(f'UI calibration started ({self.screen_w}x{self.screen_h})')
+        elif msg_type == 'calib_point':
+            self._calib_target = (
+                int(data['target_x']),
+                int(data['target_y']),
+            )
+            self._calib_samples_this_point = 0
+            print(f'Calib point {self._calib_point_idx + 1}: target {self._calib_target}')
+        elif msg_type == 'calib_point_done':
+            self._calib_point_idx += 1
+            self._calib_target = None
+            if self._calib_point_idx >= 9:
+                self._finish_ui_calibration()
+        elif msg_type == 'calib_cancel':
+            self._calib_active = False
+            self._calib_target = None
+            print('UI calibration cancelled')
+
+    def _finish_ui_calibration(self):
+        self._calib_active = False
+        if len(self._calib_features) < 27:
+            print(f'Calibration failed: only {len(self._calib_features)} samples collected')
+            return
+        try:
+            from calibration import train_gaze_model
+            model_x, model_y = train_gaze_model(
+                self._calib_features, self._calib_tx, self._calib_ty,
+            )
+            data_dir = Path(__file__).resolve().parent.parent / 'data'
+            data_dir.mkdir(parents=True, exist_ok=True)
+            output_path = data_dir / 'gaze_model.pkl'
+            joblib.dump({
+                'model_x': model_x,
+                'model_y': model_y,
+                'screen_w': self.screen_w,
+                'screen_h': self.screen_h,
+            }, output_path)
+            self.model_x = model_x
+            self.model_y = model_y
+            self.calibrated = True
+            self._model_ready_broadcast = True
+            print(f'UI calibration saved to {output_path} ({self.screen_w}x{self.screen_h})')
+        except Exception as err:
+            print(f'Calibration training failed: {err}')
+
+    def _reload_gaze_model(self):
+        try:
+            self.model_x, self.model_y, self.screen_w, self.screen_h = load_gaze_model()
+            self.calibrated = True
+            print(f'Calibration model loaded ({self.screen_w}x{self.screen_h}).')
+        except (FileNotFoundError, OSError, KeyError, ValueError) as err:
+            self.calibrated = False
+            self.model_x = self.model_y = None
+            print(f'No calibration model ({err}). Using iris estimate; use in-app or backend calibration.')
+
+    async def register(self, websocket):
+        self._clients.add(websocket)
+        print(f'Frontend connected ({len(self._clients)} client(s))')
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._capture_loop())
+
+    async def unregister(self, websocket):
+        self._clients.discard(websocket)
+        print(f'Frontend disconnected ({len(self._clients)} client(s))')
+        if not self._clients and self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+    async def _capture_loop(self):
+        camera_index = int(os.environ.get('ICOMM_CAMERA_INDEX', '0'))
+        cap = open_webcam(camera_index)
+        if not cap.isOpened():
+            print('ERROR: Cannot open webcam. Check ICOMM_CAMERA_INDEX and camera permissions.')
+            return
+
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+        self._landmarker = FaceLandmarkerProcessor()
+        smoother = GazeSmoother(alpha=0.2)
+        blink_d = BlinkDetector()
+        frames_without_face = 0
+        self._reload_gaze_model()
+
+        try:
+            while self._clients:
+                ret, frame = cap.read()
+                if not ret:
+                    await asyncio.sleep(0.02)
+                    continue
+
+                frame = cv2.flip(frame, 1)
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                gaze_x, gaze_y, blink_type = 0, 0, None
+                has_face = False
+                calib_progress = None
+                calib_point = None
+
+                try:
+                    result = self._landmarker.process(rgb)
+                    has_face = bool(result.face_landmarks)
+
+                    if has_face:
+                        frames_without_face = 0
+                        lm = result.face_landmarks[0]
+                        h, w = frame.shape[:2]
+
+                        left_eye = np.array([[lm[i].x * w, lm[i].y * h] for i in LEFT_EYE])
+                        right_eye = np.array([[lm[i].x * w, lm[i].y * h] for i in RIGHT_EYE])
+                        ear = (calculate_ear(left_eye) + calculate_ear(right_eye)) / 2.0
+                        blink_type = blink_d.update(ear)
+
+                        if self._calib_active and self._calib_target is not None:
+                            features = get_gaze_features(lm, w, h)
+                            self._calib_features.append(features)
+                            self._calib_tx.append(self._calib_target[0])
+                            self._calib_ty.append(self._calib_target[1])
+                            self._calib_samples_this_point += 1
+                            gaze_x, gaze_y = self._calib_target
+                            calib_progress = self._calib_samples_this_point
+                            calib_point = self._calib_point_idx + 1
+                        elif self.calibrated:
+                            features = get_gaze_features(lm, w, h)
+                            raw_x, raw_y = predict_gaze(self.model_x, self.model_y, features)
+                            gaze_x, gaze_y = smoother.update(raw_x, raw_y)
+                            calib_progress = None
+                            calib_point = None
+                        else:
+                            gaze_x, gaze_y = estimate_gaze_from_iris(
+                                lm, w, h, self.screen_w, self.screen_h,
+                            )
+                            calib_progress = None
+                            calib_point = None
+                    else:
+                        frames_without_face += 1
+                        if frames_without_face == 60:
+                            print('No face detected for ~2s — check lighting and look at the webcam.')
+                            frames_without_face = 0
+                except Exception as err:
+                    print(f'Gaze frame error: {err}')
+                    has_face = False
+
+                model_ready = self._model_ready_broadcast
+                if model_ready:
+                    self._model_ready_broadcast = False
+
+                message = json.dumps(build_gaze_payload(
+                    gaze_x, gaze_y, blink_type, has_face,
+                    self.screen_w, self.screen_h,
+                    model_ready=model_ready,
+                    calib_progress=calib_progress if self._calib_active else None,
+                    calib_point=calib_point if self._calib_active else None,
+                ))
+
+                dead = []
+                for ws in list(self._clients):
+                    try:
+                        await ws.send(message)
+                    except websockets.exceptions.ConnectionClosed:
+                        dead.append(ws)
+                for ws in dead:
+                    self._clients.discard(ws)
+
+                await asyncio.sleep(0.001)
+        finally:
+            cap.release()
+            if self._landmarker:
+                self._landmarker.close()
+                self._landmarker = None
+            print('Webcam released.')
+
+
+_gaze_hub = GazeHub()
+
 
 async def gaze_server(websocket):
-    """
-    WebSocket server that streams gaze data to the React frontend.
-    The frontend connects to ws://localhost:8765 and receives JSON messages.
-    """
-    print('Frontend connected!')
-    cap     = cv2.VideoCapture(0)
-    smoother = GazeSmoother(alpha=0.2)
-    blink_d  = BlinkDetector()
-
-    
-    # Load the calibration model
+    """WebSocket handler — one shared camera loop fans out to all clients."""
+    await _gaze_hub.register(websocket)
     try:
-        model_x, model_y = load_gaze_model()
-        calibrated = True
-        print('Calibration model loaded.')
-    except FileNotFoundError:
-        calibrated = False
-        print('No calibration found. Run calibration.py first.')
-    
-    '''
-    calibrated = False  # For now, we won't use the gaze prediction model
-    print ("Calibration disabled — gaze prediction will not work until you run calibration.py")
-    '''
+        async for raw in websocket:
+            try:
+                text = raw.decode() if isinstance(raw, bytes) else raw
+                data = json.loads(text)
+                _gaze_hub.handle_client_message(data)
+            except (json.JSONDecodeError, TypeError, KeyError):
+                pass
+    except websockets.exceptions.ConnectionClosed:
+        pass
+    finally:
+        await _gaze_hub.unregister(websocket)
 
-    while True:
-        ret, frame = cap.read()
-        if not ret: break
-
-        frame = cv2.flip(frame, 1)
-        rgb   = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = face_mesh.process(rgb)
-
-        gaze_x, gaze_y, blink_type = 0, 0, None
-
-        if results.multi_face_landmarks:
-            lm   = results.multi_face_landmarks[0].landmark
-            h, w = frame.shape[:2]
-
-            # Get EAR for blink detection
-            left_eye = np.array([[lm[i].x*w, lm[i].y*h] for i in LEFT_EYE])
-            right_eye= np.array([[lm[i].x*w, lm[i].y*h] for i in RIGHT_EYE])
-            ear = (calculate_ear(left_eye) + calculate_ear(right_eye)) / 2.0
-            blink_type = blink_d.update(ear)
-
-            # Get gaze prediction if calibrated
-            if calibrated:
-                features = get_gaze_features(lm, w, h)
-                raw_x, raw_y = predict_gaze(model_x, model_y, features)
-                gaze_x, gaze_y = smoother.update(raw_x, raw_y)
-
-        # Send data to frontend as JSON
-        message = json.dumps({
-            'gaze_x':    gaze_x,
-            'gaze_y':    gaze_y,
-            'blink':     blink_type,   # 'short_blink', 'long_blink', or null
-            'has_face':  results.multi_face_landmarks is not None
-        })
-        try:
-            await websocket.send(message)
-        except websockets.exceptions.ConnectionClosed:
-            break
-
-    cap.release()
 
 # Start the WebSocket server
 async def main():
@@ -267,91 +604,3 @@ if __name__ == '__main__':
     run_tracker()
 """
 
-def get_iris_center(landmarks, iris_indices, frame_w, frame_h):
-    """
-    Get the center (x, y) of an iris in pixel coordinates.
-    MediaPipe gives us 4 points around each iris — we average them.
-    """
-    points = np.array([
-        [landmarks[i].x * frame_w, landmarks[i].y * frame_h]
-        for i in iris_indices
-    ])
-    center = points.mean(axis=0)   # Average of all 4 points
-    return center   # Returns [x, y] in pixels
-
-def get_gaze_features(landmarks, frame_w, frame_h):
-    """
-    Get the combined gaze feature vector for the ML model.
-    We use both iris positions plus the head pose (nose tip position).
-    This makes the model more robust to head movement.
-    """
-    left_iris  = get_iris_center(landmarks, LEFT_IRIS,  frame_w, frame_h)
-    right_iris = get_iris_center(landmarks, RIGHT_IRIS, frame_w, frame_h)
-
-    # Nose tip — landmark 1 — tells us head orientation
-    nose_x = landmarks[1].x * frame_w
-    nose_y = landmarks[1].y * frame_h
-
-    # Normalize all values by frame size so they work across different resolutions
-    features = [
-        left_iris[0]  / frame_w,   # left iris x (0 to 1)
-        left_iris[1]  / frame_h,   # left iris y (0 to 1)
-        right_iris[0] / frame_w,   # right iris x (0 to 1)
-        right_iris[1] / frame_h,   # right iris y (0 to 1)
-        nose_x        / frame_w,   # nose x (0 to 1)
-        nose_y        / frame_h,   # nose y (0 to 1)
-    ]
-    return features   # A list of 6 numbers
-
-
-import joblib
-
-def load_gaze_model(path='../data/gaze_model.pkl'):
-    """Load the calibrated gaze model from disk."""
-    data = joblib.load(path)
-    return data['model_x'], data['model_y']
-
-def predict_gaze(model_x, model_y, features):
-    """
-    Predict where on screen the user is looking.
-    Input:  6-feature vector from get_gaze_features()
-    Output: (screen_x, screen_y) in pixels
-    """
-    X = np.array(features).reshape(1, -1)   # Model expects 2D array
-    screen_x = model_x.predict(X)[0]
-    screen_y = model_y.predict(X)[0]
-    return int(screen_x), int(screen_y)
-
-
-class GazeSmoother:
-    def __init__(self, alpha=0.2):
-        """
-        alpha: smoothing factor
-          - Lower alpha (e.g. 0.1) = smoother but more lag
-          - Higher alpha (e.g. 0.4) = more responsive but shakier
-          0.2 is a good starting point
-        """
-        self.alpha   = alpha
-        self.smooth_x = None
-        self.smooth_y = None
-
-    def update(self, raw_x, raw_y):
-        """
-        Call this every frame with the raw gaze prediction.
-        Returns the smoothed (x, y) position.
-        """
-        if self.smooth_x is None:
-            # First frame — no previous position yet, use raw position
-            self.smooth_x = raw_x
-            self.smooth_y = raw_y
-        else:
-            # Blend new position with previous smoothed position
-            self.smooth_x = self.alpha * raw_x + (1 - self.alpha) * self.smooth_x
-            self.smooth_y = self.alpha * raw_y + (1 - self.alpha) * self.smooth_y
-
-        return int(self.smooth_x), int(self.smooth_y)
-
-    def reset(self):
-        """Call this if user looks away and comes back — avoids slow drift back"""
-        self.smooth_x = None
-        self.smooth_y = None
