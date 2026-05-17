@@ -1,7 +1,13 @@
 {
   "scripts": {
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "setup:venv": "powershell -ExecutionPolicy Bypass -File scripts/setup-venv.ps1",
+    "test": "npm run test:frontend && npm run test:backend",
+    "test:frontend": "vitest run",
+    "test:backend": "powershell -ExecutionPolicy Bypass -File scripts/py.ps1 -m pytest test/backend",
+    "test:watch": "vitest test/frontend",
+    "backend:gaze": "powershell -ExecutionPolicy Bypass -File scripts/run-gaze.ps1",
+    "backend:alert": "powershell -ExecutionPolicy Bypass -File scripts/run-alert.ps1",
+    "backend:calibrate": "powershell -ExecutionPolicy Bypass -File scripts/run-calibrate.ps1"
   },
   "dependencies": {
     "@isomorphic-git/lightning-fs": "^4.6.2",
